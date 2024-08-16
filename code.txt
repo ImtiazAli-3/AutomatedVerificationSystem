@@ -1,0 +1,4141 @@
+require('dotenv').config(); // load environment variables create db connection
+const mysql = require('mysql2/promise');
+const pool = mysql.createPool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_DATABASE
+});
+
+module.exports = pool;
+
+const LocalStrategy = require('passport-local').Strategy; //strategies for passport
+const bcrypt = require('bcryptjs'); //require to hash the pwd
+
+const pool = require('./database'); //pool connection
+
+module.exports = function(passport) {
+  passport.use(
+    new LocalStrategy({ usernameField: 'email' }, async (email, password, done) => {
+      // Match user from users
+      try {
+        const [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+        if (users.length === 0) {
+          return done(null, false, { message: 'That email is not registered' });
+        }
+        // Match password after decryption
+        const user = users[0];
+        const match = await bcrypt.compare(password, user.password);
+        if (match) {
+          return done(null, user);
+        } else {
+          return done(null, false, { message: 'Password incorrect' });
+        }
+      } catch (err) {
+        return done(err);
+      }
+    })
+  );
+  passport.serializeUser((user, done) => {
+    done(null, user.id);
+  });
+
+  passport.deserializeUser(async (id, done) => {
+    try {
+      const [users] = await pool.query('SELECT * FROM users WHERE id = ?', [id]);
+      done(null, users[0]);
+    } catch (err) {
+      done(err, null);
+    }
+  });
+};
+const bcrypt = require('bcryptjs');
+const mysql = require('mysql2/promise'); // using promise version of mysql2
+const pool = require('../config/database');
+
+exports.register = async (req, res) => {
+  try {
+    const hashedPassword = await bcrypt.hash(req.body.password, 10);
+    const { email, name, lastname, address, postCode, city } = req.body;
+    // customer is default, other roles are for admins only
+    const defaultRole = 'customer';
+    const [results] = await pool.execute(
+      'INSERT INTO users (email, name, lastname, password, address, post_code, city, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [email, name, lastname, hashedPassword, address, postCode, city, defaultRole]
+    );
+    //  registration success
+    res.redirect('/login');
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server error: ' + err.message);
+  }
+};
+
+exports.login = async (req, res) => {
+  try {
+    const [users] = await pool.execute('SELECT * FROM users WHERE email = ?', [req.body.email]);
+    if (users.length === 0) {
+      return res.status(400).send('User not found');
+    }
+    const user = users[0];
+    const match = await bcrypt.compare(req.body.password, user.password);
+    if (match) {
+      // = login success
+      res.redirect('/dashboard');
+    } else {
+      //  failed login
+      res.status(400).send('Incorrect password');
+    }
+  } catch (err) {
+    //  errors
+    res.status(500).send('Server error');
+  }
+};
+
+exports.logout = (req, res) => {
+  req.logout(function(err) {
+    if (err) { return next(err); }
+    req.session.destroy(() => {
+      res.clearCookie('connect.sid'); // clear the session cookie
+      res.redirect('/login'); // Redirect
+    });
+  });
+};
+
+exports.updateAccount = async (req, res) => {
+  const userId = req.user.id;
+  const { name, lastname, email, address, postCode, city, oldPassword, newPassword } = req.body;
+
+  try {
+    let query;
+    let params;
+
+    // Check and hash new password if old and new passwords are entere in the form
+    if (oldPassword && newPassword) {
+      const [users] = await pool.execute('SELECT password FROM users WHERE id = ?', [userId]);
+      if (users.length === 0) {
+        return res.status(400).send('User not found');
+      }
+      const user = users[0];
+      const match = await bcrypt.compare(oldPassword, user.password);
+      if (!match) {
+        return res.status(400).send('Incorrect old password');
+      }
+      const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+      query = 'UPDATE users SET name = ?, lastname = ?, email = ?, address = ?, post_code = ?, city = ?, password = ? WHERE id = ?';
+      params = [name, lastname, email, address, postCode, city, hashedNewPassword, userId];
+    } else {
+      query = 'UPDATE users SET name = ?, lastname = ?, email = ?, address = ?, post_code = ?, city = ? WHERE id = ?';
+      params = [name, lastname, email, address, postCode, city, userId];
+    }
+
+    await pool.execute(query, params);
+
+    res.redirect('/account'); // Redirect to acount page 
+  } catch (err) {
+    console.error('Error executing the update account query:', err);
+    res.status(500).send('Server error: ' + err.message);
+  }
+};
+
+
+
+const express = require('express');
+const passport = require('passport');
+const router = express.Router();
+const userController = require('../controllers/userControllers');
+
+router.get('/login', (req, res) => {
+  res.render('login');
+});
+
+router.get('/logout', userController.logout);
+
+// authenticate the passport
+router.post('/login',
+  passport.authenticate('local', { 
+    successRedirect: '/', 
+    failureRedirect: '/login', 
+    failureFlash: true 
+  })
+);
+
+router.post('/update-account', userController.updateAccount);
+
+module.exports = router;
+
+const express = require('express');
+const db = require('../config/database');
+const mysql = require('mysql2/promise');
+const router = express.Router();
+
+// check if the user is authenticated o rnot
+function isAuthenticated(req, res, next) {
+  if (req.isAuthenticated()) return next();
+  res.redirect('/login');
+}
+router.post('/add-to-basket', isAuthenticated, async (req, res) => {
+    const { itemId, quantity } = req.body;
+    const userId = req.user.id;
+  
+    try {
+      // Check if item exists in  basket
+      const [existingItem] = await db.query('SELECT * FROM basket WHERE user_id = ? AND item_id = ?', [userId, itemId]);
+      
+      if (existingItem.length > 0) {
+        // Item exists, update the quantity
+        const newQuantity = existingItem[0].quantity + quantity;
+        await db.query('UPDATE basket SET quantity = ? WHERE user_id = ? AND item_id = ?', [newQuantity, userId, itemId]);
+        res.json({ message: 'Quantity updated' });
+      } else {
+        // Item doesnot exist, insert a new entry
+        await db.query('INSERT INTO basket (user_id, item_id, quantity) VALUES (?, ?, ?)', [userId, itemId, quantity]);
+        res.json({ message: 'Item added to basket' });
+      }
+    } catch (err) {
+      console.error('Error during database operation:', err);
+      res.status(500).json({ error: 'Database error' });
+    }
+  });
+  
+
+  router.get('/cart', isAuthenticated, async (req, res) => {
+    const userId = req.user.id;
+    try {
+      const [cartItems] = await db.query(`
+        SELECT basket.id, basket.quantity, items.name, items.price, items.image
+        FROM basket
+        JOIN items ON basket.item_id = items.id
+        WHERE basket.user_id = ?
+      `, [userId]);
+  
+      let shippingCost = 5.00; 
+      let taxRate = 0.20; //extras
+    
+      let subtotal = cartItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+      let estimatedTax = subtotal * taxRate;
+      let cartTotal = subtotal + shippingCost + estimatedTax;
+      
+  
+      res.render('cart', {
+        cartItems,
+        subtotal: subtotal.toFixed(2),
+        shippingCost: shippingCost.toFixed(2),
+        estimatedTax: estimatedTax.toFixed(2),
+        cartTotal: cartTotal.toFixed(2)
+      });
+    } catch (err) {
+      console.error('Error fetching cart items:', err);
+      res.status(500).send('Error fetching cart items');
+    }
+  });
+  
+//post method for update cart. items can be removed or increased within the cart. updates the table and page without refresh
+router.post('/update-cart', isAuthenticated, async (req, res) => {
+    const { itemId, newQuantity } = req.body;
+    const userId = req.user.id; 
+  
+    try {
+      await db.query('UPDATE basket SET quantity = ? WHERE id = ? AND user_id = ?', [newQuantity, itemId, userId]);
+      res.json({ message: 'Cart updated' });
+    } catch (err) {
+      console.error('Error updating cart:', err);
+      res.status(500).json({ error: 'Error updating cart', details: err.message });
+    }
+  });
+  
+  router.post('/remove-from-cart', isAuthenticated, async (req, res) => {
+    const { itemId } = req.body;
+    const userId = req.user.id;
+  
+    try {
+      await db.query('DELETE FROM basket WHERE id = ? AND user_id = ?', [itemId, userId]);
+      res.json({ message: 'Item removed from cart' });
+    } catch (err) {
+      console.error('Error removing item from cart:', err);
+      res.status(500).json({ error: 'Error removing item from cart', details: err.message });
+    }
+  });
+      
+  
+
+module.exports = router;
+
+const pool = require('../config/database');
+//for the items
+async function fetchItemById(itemId) {
+  try {
+    const query = 'SELECT * FROM items WHERE id = ?';
+    const [rows] = await pool.query(query, [itemId]);
+    if (rows.length > 0) {
+      return rows[0]; // Return the first item in the rows array
+    }
+    return null; // Return null if no item found
+  } catch (err) {
+    throw err; // Rethrow any caught error
+  }
+}
+
+async function fetchItemsByCategory(category, excludeItemId) {
+  const query = 'SELECT * FROM items WHERE category = ? AND id != ? ORDER BY RAND() LIMIT 5';
+  const [similarItems] = await pool.query(query, [category, excludeItemId, 5]); 
+  return similarItems;
+}
+
+module.exports = {
+  fetchItemById,
+  fetchItemsByCategory
+};
+
+const express = require('express');
+const db = require('../config/database');
+const mysql = require('mysql2/promise');
+const router = express.Router();
+const { fetchItemById, fetchItemsByCategory } = require('./itemService');
+const path = require('path');
+const fs = require('fs');
+//routes for pages in the site.
+router.get('/about', (req, res) => {
+  res.render('about');
+});
+
+router.get('/service', (req, res) => {
+  res.render('service');
+});
+
+router.get('/contact', (req, res) => {
+  res.render('contact');
+});
+
+router.get('/term', (req, res) => {
+  res.render('term');
+});
+
+router.get('/sellitem', (req, res) => {
+  res.render('sellitem');
+});
+
+//category route, gets the items by the category and displays it in the category page
+//contains sorting and filter logic, where you can filter and sort by parameters
+router.get('/category/:categoryName', async (req, res) => {
+  const categoryName = req.params.categoryName;
+  const { sort, manufacturer } = req.query;
+
+  try {
+      let query = 'SELECT * FROM items WHERE category = ?';
+      const params = [categoryName];
+      
+      if (manufacturer && manufacturer !== '') {
+          query += ' AND manufacturer = ?';
+          params.push(manufacturer);
+      }
+
+      // Sorting logic
+      switch (sort) {
+          case 'name_asc':
+              query += ' ORDER BY name ASC';
+              break;
+          case 'name_desc':
+              query += ' ORDER BY name DESC';
+              break;
+          case 'price_asc':
+              query += ' ORDER BY price ASC';
+              break;
+          case 'price_desc':
+              query += ' ORDER BY price DESC';
+              break;
+          default:
+              break;
+      }
+
+      const [items] = await db.execute(query, params);
+
+      const [manufacturers] = await db.execute(
+          'SELECT DISTINCT manufacturer FROM items WHERE category = ? ORDER BY manufacturer',
+          [categoryName]
+      );
+      res.render('category', {
+          title: categoryName,
+          items: items,
+          manufacturers: manufacturers,
+          selectedManufacturer: manufacturer || '',
+          currentSort: sort || ''
+      });
+  } catch (err) {
+      console.error('Error occurred:', err.message);
+      console.error(err.stack);
+      res.status(500).send('Server error');
+  }
+});
+//get item router, gets all similar items based on categories in the product page
+router.get('/item/:id', async (req, res) => {
+  try {
+    const itemId = req.params.id;
+    const itemDetails = await fetchItemById(itemId);
+
+    if (itemDetails) {
+      const similarItems = await fetchItemsByCategory(itemDetails.category, itemId);
+      res.render('item', { item: itemDetails, similarItems: similarItems });
+    } else {
+      res.status(404).send('Item not found');
+    }
+  } catch (err) {
+    console.error('Error occurred:', err.message);
+    res.status(500).send('Server error');
+  }
+});
+//the account page contains all their information, their address and email, exisiting listings, failed listings
+//they must be logged in to access this
+router.get('/account', async (req, res) => {
+  if (!req.user || !req.user.id) {
+    return res.redirect('/login');
+  }
+
+  try {
+    const userId = req.user.id;
+    const userQuery = 'SELECT email, name, lastname, address, post_code, city FROM users WHERE id = ?';
+    const [user] = await db.query(userQuery, [userId]);
+
+    const itemsQuery = 'SELECT * FROM items WHERE seller_id = ?';
+    const [items] = await db.query(itemsQuery, [userId]);
+
+    const pendingQuery = 'SELECT * FROM failedlistings WHERE seller_id = ? AND moderated = FALSE';
+    const [pendingItems] = await db.query(pendingQuery, [userId]);
+
+    res.render('account', {
+      user: user[0],
+      items: items || [],
+      pendingItems: pendingItems,
+      query: req.query
+    });
+
+  } catch (err) {
+    console.error("Error in /account route:", err);
+    res.status(500).send('Server error');
+  }
+});
+//admin dashbaord site, accessed through usual login, but header changes to allow admin functionality
+//admin can access each item and then perform actions neccessary
+router.get('/dashboard', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).send('Access Denied');
+}
+try {
+  const itemsQuery = 'SELECT * FROM items';
+  const [items] = await db.query(itemsQuery);
+    res.render('dashboard', {
+        items: items || []
+    });
+} catch (error) {
+    console.error('Error in admin dashboard route:', error);
+    res.status(500).send('Internal Server Error');
+}
+});
+//search function used to refine the items in the dashboard
+router.get('/dashboard/search', async (req, res) => {
+  const searchTerm = req.query.q;
+  console.log('Received search term:', searchTerm); // Debugging log
+  if (!searchTerm) {
+    console.log('No search term provided');
+    return res.json([]);
+  }
+  try {
+    // Updated query to search across multiple fields
+    const query = `
+      SELECT * FROM items 
+      WHERE name LIKE ? OR 
+            manufacturer LIKE ? OR 
+            category LIKE ? OR 
+            id LIKE ?
+    `;
+    const wildcardSearchTerm = `%${searchTerm}%`;
+    const searchParams = [wildcardSearchTerm, wildcardSearchTerm, wildcardSearchTerm, wildcardSearchTerm];
+
+    // Execute the query with the search parameters for each field
+    const [searchResults] = await db.execute(query, searchParams);
+    console.log('Search results:', searchResults); // Debugging log
+    res.json(searchResults);
+  } catch (error) {
+    console.error('Error during item search:', error);
+    res.status(500).json({ error: 'Error performing search' });
+  }
+});
+
+//function to delete items when clicked from the dashboard, in case of any items in baskets, it also deletes them
+
+router.get('/admin/items/delete/:id', async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') {
+        return res.status(403).send('Access Denied');
+    }
+
+    const itemId = req.params.id;
+
+    if (!itemId) {
+        return res.status(400).send('Invalid item ID');
+    }
+
+    const connection = await db.getConnection();
+
+    try {
+        await connection.beginTransaction(); 
+
+        await connection.query('DELETE FROM items WHERE id = ?', [itemId]);
+        await connection.query('DELETE FROM basket WHERE item_id = ?', [itemId]);
+
+        await connection.commit(); // Commit
+        res.redirect('/dashboard?success=Item deleted successfully');
+    } catch (error) {
+        await connection.rollback(); // Rollback 
+        console.error('Failed to delete item:', error);
+        res.status(500).send('Failed to delete item');
+    } finally {
+        connection.release();
+    }
+});
+
+// Display edit item form, admins can edit user items and then submit them back into the items table
+router.get('/admin/items/edit/:id', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+      return res.status(403).send('Access Denied');
+  }
+
+  const itemId = req.params.id;
+
+  try {
+      const [items] = await db.query('SELECT * FROM items WHERE id = ?', [itemId]);
+      if (items.length) {
+          res.render('edititem', { item: items[0] });
+      } else {
+          res.status(404).send('Item not found');
+      }
+  } catch (error) {
+      console.error('Failed to fetch item for editing:', error);
+      res.status(500).send('Error fetching item');
+  }
+});
+// Process edit item form submission, the post method for the form. takes the form info even if unchanged and updates
+router.post('/admin/items/edit/:id', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+      return res.status(403).send('Access Denied');
+  }
+
+  const itemId = req.params.id;
+  const { name, description, price, category, size, material, manufacturer } = req.body;  // Extract other fields as needed
+
+  try {
+      await db.query('UPDATE items SET name=?, description=?, price=?, category = ?, size =?, material=?, manufacturer=? WHERE id = ?', [name, description, price, category, size, material, manufacturer, itemId]);
+      res.redirect('/dashboard?success=Item updated successfully');
+  } catch (error) {
+      console.error('Failed to update item:', error);
+      res.status(500).send('Failed to update item');
+  }
+});
+//admin page for the users of the system. displays all of their information and roles, only 2 roles customer and admin. does not display pwds
+router.get('/dashboardusers', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).send('Access Denied');
+}
+  try {
+    const usersQuery = 'SELECT id, email, name, lastname, city, post_code, address, role FROM users';
+    const [users] = await db.query(usersQuery);
+    res.render('dashboardusers', { users });
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    res.status(500).send('Server error');
+  }
+});
+//search function for admin users, can search with name, email, address, city, post code
+router.get('/dashboardusers/search', async (req, res) => {
+  const searchTerm = req.query.q;
+  if (!searchTerm) {
+    return res.json([]);
+  }
+
+  try {
+    const query = `
+      SELECT * FROM users 
+      WHERE id LIKE ? OR 
+            email LIKE ? OR 
+            CONCAT(name, ' ', lastname) LIKE ? OR 
+            address LIKE ? OR 
+            post_code LIKE ? OR 
+            city LIKE ?
+    `;
+    const wildcardSearchTerm = `%${searchTerm}%`;
+    const searchParams = [wildcardSearchTerm, wildcardSearchTerm, wildcardSearchTerm, wildcardSearchTerm, wildcardSearchTerm, wildcardSearchTerm];
+
+    const [searchResults] = await db.execute(query, searchParams);
+    res.json(searchResults);
+  } catch (error) {
+    console.error('Error during user search:', error);
+    res.status(500).json({ error: 'Error performing search' });
+  }
+});
+
+//admin function for editing users information, can edit all information
+router.get('/admin/users/edit/:id', async (req, res) => {
+  try {
+    if (!req.user || req.user.role !== 'admin') {
+      return res.status(403).send('Access Denied');
+    }
+    const userId = req.params.id;
+    const userQuery = 'SELECT * FROM users WHERE id = ?';
+    const [user] = await db.query(userQuery, [userId]);
+    if (!user || user.length === 0) {
+      return res.status(404).send('User not found');
+    }
+    res.render('edituser', { user: user[0] });
+  } catch (error) {
+    console.error('Failed to fetch user for editing:', error);
+    res.status(500).send('Error fetching user');
+  }
+});
+
+//post method for the edit users, allows the update of information
+
+router.post('/admin/users/edit/:id', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).send('Access Denied');
+}
+const { email, name, lastname, address, post_code, city, role } = req.body;
+  try {
+    await db.query('UPDATE users SET email = ?, name = ?, lastname = ?, address = ?, post_code = ?, city = ?, role = ? WHERE id = ?', [email, name, lastname, address, post_code, city, role, req.params.id]);
+    res.redirect('/dashboardusers');
+  } catch (error) {
+    console.error('Failed to update user:', error);
+    res.status(500).send('Failed to update user');
+  }
+});
+
+router.get('/admin/users/delete/:id', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).send('Access Denied');
+}
+  try {
+    await db.query('DELETE FROM users WHERE id = ?', [req.params.id]);
+    res.redirect('dashboardusers');
+  } catch (error) {
+    console.error('Failed to delete user:', error);
+    res.status(500).send('Failed to delete user');
+  }
+});
+//shows all failed listings from the table that have failed verification twice against the scraped data from the website
+//this is displayed in a table and has approve or deny buttons for the admin to select based on their own decision
+router.get('/dashboardlistings', async (req, res) => {
+  try {
+    const [failedListings] = await db.query(`
+    SELECT 
+        fl.id,
+        fl.name AS fl_name,
+        fl.description AS fl_description,
+        fl.price AS fl_price,
+        fl.size AS fl_size,
+        fl.manufacturer AS fl_manufacturer,
+        fl.material AS fl_material,
+        fl.category AS fl_category,
+        fl.image AS fl_image,
+        fl.seller_id,
+        fl.verification_attempts,
+        sd.failedlisting_id,
+        sd.name AS sd_name,
+        sd.description AS sd_description,
+        sd.price AS sd_price,
+        sd.size AS sd_size,
+        sd.manufacturer AS sd_manufacturer,
+        sd.material AS sd_material,
+        sd.category AS sd_category,
+        sd.image AS sd_image
+    FROM 
+        failedlistings fl
+    JOIN 
+        scraped_data sd ON fl.id = sd.failedlisting_id
+    WHERE 
+        fl.verification_attempts = 2
+`);
+      res.render('dashboardlistings', { failedListings });
+  } catch (error) {
+      console.error('Error fetching failed listings:', error);
+      res.status(500).send('Unable to fetch data');
+  }
+});
+
+// Route to verify a listing from the approval button in the failedlistings
+router.post('/dashboardlistings/verify-listing/:id', async (req, res) => {
+  const connection = await db.getConnection(); 
+  try {
+      const { id } = req.params;
+      await connection.beginTransaction();
+
+      const [listingData] = await connection.query('SELECT * FROM failedlistings WHERE id = ?', [id]);
+      if (listingData.length === 0) {
+        throw new Error('No listing found with the given ID.');
+      }
+      const listing = listingData[0];
+
+      await connection.beginTransaction();
+
+      // Inserting the verified listing into the items table
+      const [insertResult] = await connection.execute(
+        'INSERT INTO items (name, description, price, size, manufacturer, material, category, image, seller_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', 
+        [listing.name, listing.description, listing.price, listing.size, listing.manufacturer, listing.material, listing.category, listing.image, listing.seller_id]
+      );
+      const newItemId = insertResult.insertId;
+
+      // Renaming the image with the new ID
+      const oldImagePath = path.join(__dirname, '..', 'uploads', listing.image);
+      const newImagePath = path.join(__dirname, '..', 'uploads', `${newItemId}${path.extname(listing.image)}`);
+      const newImageName = newItemId + path.extname(listing.image); 
+      fs.renameSync(oldImagePath, newImagePath); 
+      
+      await connection.execute('UPDATE items SET image = ? WHERE id = ?', [newImageName, newItemId]);
+      await connection.query('DELETE FROM scraped_data WHERE failedlisting_id = ?', [id]);
+      await connection.query('DELETE FROM failedlistings WHERE id = ?', [id]);
+      //delete from failedlistings and scrapeddata so that the information is not appearing again. item is now verified
+      await connection.commit();
+      res.send('Listing verified and moved successfully');
+  } catch (error) {
+      await connection.rollback();
+      console.error('Error verifying listing:', error);
+      res.status(500).send('Failed to verify and move listing');
+  } finally {
+      connection.release();
+  }
+});
+
+router.post('/dashboardlistings/reject-listing/:id', async (req, res) => {
+  const { id } = req.params;
+
+  const connection = await db.getConnection();
+  
+  try {
+    await connection.beginTransaction();
+    await connection.execute('DELETE FROM scraped_data WHERE failedlisting_id = ?', [id]);
+    await connection.execute('DELETE FROM failedlistings WHERE id = ?', [id]);
+    await connection.commit();
+    //delete both from failed listings and scraped data so that it resemebles failed logic.item has to be reverified later 
+    res.send('Listing rejected successfully');
+  } catch (error) {
+    if (connection) await connection.rollback();
+
+    console.error('Error rejecting listing:', error);
+    res.status(500).send('Failed to reject listing');
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+//simple checkout process, no functionality other than a fake submission
+router.post('/process-checkout', async (req, res) => {
+  if (!req.user) {
+    return res.status(401).send('You must be logged in to view this page.');
+  }
+
+  // Default values for missing parameters
+  const user_email = req.user.email;
+  const user_address = req.user.address;
+  const total_amount = req.body.total_amount || 0;  // Default to 0 i
+
+    const connection = await db.getConnection();
+
+  try {
+    const [orderResult] = await connection.execute(
+      'INSERT INTO orders (user_email, user_address, total_amount, status) VALUES (?, ?, ?, ?)',
+      [user_email, user_address, total_amount, 'Pending']
+    );
+    const orderId = orderResult.insertId;
+
+    // Retrieve the user's basket items
+    const [basketItems] = await connection.execute(
+      'SELECT * FROM basket WHERE user_id = ?',
+      [req.user.id]
+    );
+
+    // Insert each basket item into the order_items table
+    for (const item of basketItems) {
+      await connection.execute(
+        'INSERT INTO order_items (order_id, item_id, quantity) VALUES (?, ?, ?)',
+        [orderId, item.item_id, item.quantity]
+      );
+    }
+
+    // Clear the user's basket after chekout
+    await connection.execute('DELETE FROM basket WHERE user_id = ?', [req.user.id]);
+
+    await connection.commit(); 
+
+    res.redirect(`/orders`);
+  } catch (error) {
+    await connection.rollback();
+    console.error('Failed to process order:', error);
+    res.status(500).send('Failed to process your order.');
+  } finally {
+    connection.release(); 
+  }
+});
+//gets all of the users orders after checking out. displays all of the information, including each itempurcchased, purchase data, and grand total
+router.get('/orders', async (req, res) => {
+  if (!req.user) {
+    return res.status(401).send('You must be logged in to view this page.');
+  }
+  try {
+    const [orders] = await db.execute(`
+    SELECT o.id, o.total_amount, o.status, o.created_at, 
+    GROUP_CONCAT(CONCAT(i.id, ':', i.name) SEPARATOR ',') AS item_details
+    FROM orders o
+    JOIN order_items oi ON o.id = oi.order_id
+    JOIN items i ON oi.item_id = i.id
+    WHERE o.user_email = ?
+    GROUP BY o.id
+    ORDER BY o.created_at DESC
+    
+    `, [req.user.email]);
+
+    res.render('orders', { orders });
+  } catch (error) {
+    console.error('Error fetching orders:', error);
+    res.status(500).send('Failed to retrieve orders.');
+  }
+});
+//createa a simple search functionality based on the items name, returns a simple page of all items that have lIKE names
+router.get('/search', async (req, res) => {
+  try {
+    const searchTerm = req.query.q;
+    if (!searchTerm) {
+      return res.redirect('/');
+    }
+    
+     //searches on name
+    const query = 'SELECT * FROM items WHERE name LIKE ? OR category LIKE ?';
+    const wildcardSearchTerm = `%${searchTerm}%`;
+    const [searchResults] = await db.execute(query, [wildcardSearchTerm, wildcardSearchTerm]);
+
+    res.render('searchresults', { 
+      items: searchResults, 
+      title: 'Search Results',
+      searchTerm: searchTerm 
+    });
+  } catch (error) {
+    console.error('Error during search:', error);
+    res.status(500).send('Error performing search');
+  }
+});
+//router method so that the user can select their own item from the drop down and edit it accordingly, then submit back into items table
+router.get('/useredititem', async (req, res) => {
+  try {
+    const seller_id = req.user.id;
+    const [items] = await db.execute('SELECT id, name FROM items WHERE seller_id = ?', [seller_id]);
+    res.render('useredititem', { items });
+  } catch (error) {
+    console.error('Error fetching items:', error);
+    res.status(500).send('Error fetching items');
+  }
+});
+
+router.get('/user/edit-item', async (req, res) => {
+  const item_id = req.query.item_id;
+  try {
+    const [results] = await db.execute('SELECT * FROM items WHERE id = ?', [item_id]);
+    if (results.length > 0) {
+      const item = results[0];
+      item.price = parseFloat(item.price).toFixed(2); 
+      res.json(item);
+    } else {
+      res.status(404).json({ message: 'Item not found' });
+    }
+  } catch (error) {
+    console.error('Error retrieving item details:', error);
+    res.status(500).json({ error: 'Error retrieving item for editing' });
+  }
+});
+//post method to update the users item tables
+router.post('/user/update-item', async (req, res) => {
+  const { id, name, description, price, size, material, category, manufacturer } = req.body;
+  const values = [
+    name,
+    description,
+    price ? parseFloat(price).toFixed(2) : null,
+    size,
+    material,
+    category,
+    manufacturer,
+    id
+  ].map(val => val ?? null); // Convert undefined to null
+
+  try {
+    await db.execute(
+      'UPDATE items SET name = ?, description = ?, price = ?, size = ?, material = ?, category = ?, manufacturer = ? WHERE id = ?',
+      values
+    );
+    res.send('Item updated successfully');
+  } catch (error) {
+    console.error('Failed to update item:', error);
+    res.status(500).send('Error updating item');
+  }
+});
+
+
+module.exports = router;
+
+require('dotenv').config();
+const axios = require('axios');
+const cheerio = require('cheerio');
+const fs = require('fs');
+const path = require('path');
+const mysql = require('mysql2/promise');
+const db = require('../config/database');
+const stringSimilarity = require('string-similarity');
+const express = require('express');
+const router = express.Router();
+const natural = require('natural');
+const sharp = require('sharp');
+const { imageHash } = require('image-hash');
+const uuid = require('uuid');
+//classifier path for the pre trained classifier model
+const classifierPath = path.join(__dirname, '..', './classifier.json');
+let classifier;
+natural.BayesClassifier.load(classifierPath, null, function(err, loadedClassifier) {
+    if (err) {
+        console.error('Error loading classifier:', err);
+        return;
+    }
+    classifier = loadedClassifier;
+})
+//regex code to just take the number or the text, could be used
+const extractNumber = (text) => {
+  text = String(text).replace(/,+/g, ''); 
+  const matches = text.match(/[0-9.]+/);
+  return matches ? parseFloat(matches[0]) : null;
+};
+
+const cleanText = (text) => {
+  return String(text)
+    .toLowerCase() 
+    .replace(/^(size:|material:|manufacturer:)\s*/i, '') 
+    .replace(/,+/g, '') 
+    .trim();
+};
+//regex to extract the description without any of the other information, material, manufacturer, size etc
+const extractDetails = (text, keyword) => {
+  for (let keyWord of keyword) {
+    const regex = new RegExp(`${keyWord}( approx)?\\s*:\\s*([^,;\\n]+)`, 'i');
+    const match = text.match(regex);
+    if (match) {
+      return match[2].trim().replace(/\n/g, ' '); 
+    }
+  }
+  return '';
+};
+
+const extractDescription = (text, keywords) => {
+  //regex to find the position of the first keyword
+  const regex = new RegExp(`(${keywords.join('|')})`, 'i');
+  const match = text.search(regex);
+  if (match !== -1) {
+    return text.substring(0, match).trim();
+  }
+  return text; // Return full text if no keywords 
+};
+
+function ensureDirectoryExistence(filePath) {
+  const dirname = path.dirname(filePath);
+  if (!fs.existsSync(dirname)) {
+      fs.mkdirSync(dirname, { recursive: true });
+      console.log(`Directory created at ${dirname}`);
+  }
+}
+
+//download the scraped image from the website and save it into the location
+async function downloadImage(imageUrl, baseOutputPath) {
+  const uniqueFilename = `scraped_image_${uuid.v4()}.jpg`;
+  const outputPath = path.join(baseOutputPath, uniqueFilename);
+
+  try {
+      const response = await axios.get(imageUrl, { responseType: 'stream' });
+      const writer = fs.createWriteStream(outputPath);
+      response.data.pipe(writer);
+
+      return new Promise((resolve, reject) => {
+          writer.on('finish', () => {
+              writer.close();
+              resolve(outputPath);
+          });
+          writer.on('error', reject);
+      });
+  } catch (error) {
+      console.error(`Error downloading scraped image: ${error.message}`);
+      return null;
+  }
+}
+
+//process the images to rescale them and greyscale
+async function preprocessImage(inputPath) {
+  if (!fs.existsSync(inputPath)) {
+    console.error(`File does not exist: ${inputPath}`);
+    throw new Error(`File does not exist: ${inputPath}`);
+  }
+
+  console.log(`Processing image at: ${inputPath}`);
+  const outputPath = inputPath.replace(path.extname(inputPath), '-processed' + path.extname(inputPath));
+  try {
+    await sharp(inputPath)
+      .resize(200, 200)
+      .grayscale()
+      .toFile(outputPath);
+    console.log(`Processed image saved to ${outputPath}`);
+    return outputPath;
+  } catch (error) {
+    console.error('Error processing the image with Sharp:', error);
+    throw error;
+  }
+}
+//Compare the images, increased the threshold and the bits to increase the sensitivity
+function compareImages(imagePath1, imagePath2, threshold = 200) {
+  return new Promise((resolve, reject) => {
+      imageHash(imagePath1, 32, true, (error, data1) => {
+          if (error) {
+              reject(error);
+              return;
+          }
+          imageHash(imagePath2, 32, true, (error, data2) => {
+              if (error) {
+                  reject(error);
+                  return;
+              }
+              // Calculate  Hamming distance
+              let dist = 0;
+              for (let i = 0; i < data1.length; i++) {
+                  if (data1[i] !== data2[i]) {
+                      dist++;
+                  }
+              }
+              resolve(dist <= threshold);
+              console.log(dist);
+          });
+      });
+  });
+}
+
+//scrape from a site called kaika, this is different to the other scraper
+// take the name, desc, price, manufacturer, image and use them for direct comparison
+// take the default search url, and take the name we use for the form and use that as a 
+//search term to find the first item in the search bar.
+async function scrapeFromKaika(searchTerm) {
+  const baseUrl = 'https://www.kaika.com.au';
+  const searchUrl = `${baseUrl}/?rf=kw&kw=${encodeURIComponent(searchTerm)}`;
+  console.log("Attempting to fetch:", searchUrl);
+
+  try {
+      const response = await axios.get(searchUrl);
+      const $ = cheerio.load(response.data);
+      const firstResultLink = new URL($('div.thumbnail a').attr('href'), baseUrl).href;
+      const detailResponse = await axios.get(firstResultLink);
+      const detail$ = cheerio.load(detailResponse.data);
+
+      const scrapedName = detail$('h1[itemprop="name"]').text().trim();
+      const scrapedManufacturer = detail$('p.manufacturertext a').text().trim();
+      const scrapedPrice = parsePrice(detail$('div.productprice').text().trim());
+      const scrapedDescription = detail$('div.productdetails').text().trim() || "No description available";
+
+      let imageUrl = detail$('div#_jstl__images img').attr('src');
+      if (!imageUrl.startsWith('http')) {
+          imageUrl = baseUrl + imageUrl;  // convert to absolute URL
+      }
+
+      return {
+          name: scrapedName,
+          description: scrapedDescription,
+          manufacturer: scrapedManufacturer,
+          price: scrapedPrice,
+          imageUrl: imageUrl
+      };
+  } catch (error) {
+      console.error(`Error scraping Kaika: ${error.message}`);
+      return null;
+  }
+}
+//crunchyroll scraper
+//same method as the first scraper
+//instead, we take the name, description, price, image, (size, material, manufacturer) -> if the last 3 exist
+async function scrapeFromCrunchyroll(searchTerm) {
+  const baseUrl = 'https://store.crunchyroll.com';
+  const searchUrl = `${baseUrl}/search?q=${encodeURIComponent(searchTerm)}`;
+
+  try {
+      const searchResponse = await axios.get(searchUrl);
+      const search$ = cheerio.load(searchResponse.data);
+      const firstResultLink = baseUrl + search$('a.link').first().attr('href');
+      const response = await axios.get(firstResultLink);
+      const $ = cheerio.load(response.data);
+
+      const detailsText = $('div.short-description').text();
+      const sizeKeywords = ['Size', 'Dimension', 'Length','Size approx'];
+      const materialKeywords = ['Material', 'Composition','Materials'];
+      const manufacturerKeywords = ['Manufacturer', 'Brand', 'Maker'];
+      const descriptionKeywords = sizeKeywords.concat(materialKeywords).concat(manufacturerKeywords);
+      
+      let scrapedName = $('h1.product-name').text().trim();
+  
+      if (scrapedName.substring(0, scrapedName.length / 2) === scrapedName.substring(scrapedName.length / 2)) {
+        scrapedName = scrapedName.substring(0, scrapedName.length / 2).trim();
+      }
+  
+      let scrapedPrice = null;
+  
+      const salePriceElement = $('span.sales > span.value');
+      if (salePriceElement.length > 0) {
+          scrapedPrice = parseFloat(salePriceElement.attr('content'));
+      } else {
+          const originalPriceElement = $('del.strike-through > span.value');
+          if (originalPriceElement.length > 0) {
+              scrapedPrice = parseFloat(originalPriceElement.attr('content'));
+          }
+      }
+      
+      let imageUrl = $('div.easyzoom--overlay:first').find('img').attr('src');
+      if (!imageUrl.startsWith('http')) {
+          imageUrl = baseUrl + imageUrl;  // Convert to absolute URL
+      }
+      const actualDescription = extractDescription(detailsText, descriptionKeywords);
+      const scrapedSize = extractDetails(detailsText, sizeKeywords);
+      const scrapedMaterial = extractDetails(detailsText, materialKeywords);
+      const scrapedManufacturer = extractDetails(detailsText, manufacturerKeywords);
+
+      return {
+          name: scrapedName,
+          description: actualDescription,
+          price: scrapedPrice,
+          imageUrl: imageUrl,
+          size: scrapedSize,
+          material: scrapedMaterial,
+          manufacturer: scrapedManufacturer
+      };
+  } catch (error) {
+      console.error('Error scraping Crunchyroll:', error);
+      return null;
+  }
+}
+//return the values of each scraped item from both of the scrapers, this will be used for the verify
+function parsePrice(priceString) {
+  return priceString ? parseFloat(priceString.replace(/[^0-9.]/g, "")) : null;
+}
+//create the verification
+// take the form data and take the scraped data as constants and use them to compare against each other
+const verifyItem = async (params, scrapedData, basePath) => {
+  const { name, price, size, manufacturer, material, description, category: submittedCategory, uploadedImagePath } = params;
+  const { name: scrapedName, price: scrapedPrice, size: scrapedSize, material: scrapedMaterial, manufacturer: scrapedManufacturer, imageUrl } = scrapedData;
+
+  // Preprocess and compare images
+  const processedUploadedImage = await preprocessImage(uploadedImagePath);
+  const scrapedImagePath = await downloadImage(imageUrl, basePath);
+  const processedScrapedImage = await preprocessImage(scrapedImagePath);
+  const imagesAreSimilar = await compareImages(processedUploadedImage, processedScrapedImage);
+
+  // classify the description to predict the category
+  let predictedCategory = null;
+  if (classifier && description) {
+      predictedCategory = classifier.classify(description).toLowerCase();
+      console.log(`Predicted category: ${predictedCategory}`);
+  }
+
+  // compare textual and numeric attributes
+  const textSimilarityThreshold = 0.6; // Example similarity threshold for text attributes
+  const priceDifferenceThreshold = 0.25; // 25% price difference allowed
+
+  let scores = {
+      nameSimilar: stringSimilarity.compareTwoStrings(name.toLowerCase(), scrapedName.toLowerCase()) >= textSimilarityThreshold,
+      priceSimilar: Math.abs(scrapedPrice - price) / price <= priceDifferenceThreshold,
+      sizeSimilar: size && scrapedSize ? size === scrapedSize : true,
+      materialSimilar: material && scrapedMaterial ? stringSimilarity.compareTwoStrings(material.toLowerCase(), scrapedMaterial.toLowerCase()) >= textSimilarityThreshold : true,
+      manufacturerSimilar: manufacturer && scrapedManufacturer ? stringSimilarity.compareTwoStrings(manufacturer.toLowerCase(), scrapedManufacturer.toLowerCase()) >= textSimilarityThreshold : true,
+      imagesAreSimilar: imagesAreSimilar,
+      categoryMatch: predictedCategory === submittedCategory.toLowerCase()
+  };
+
+  // calculate the overall match percentage
+  const totalAttributes = Object.keys(scores).length;
+  const matchingAttributes = Object.values(scores).filter(Boolean).length;
+  const matchPercentage = matchingAttributes / totalAttributes;
+
+  // determine if the item is verified
+  const VERIFIED_THRESHOLD = 0.6; //decided to make an average threshold, anything 60 or more will be verified
+  const verified = matchPercentage >= VERIFIED_THRESHOLD; //anything under will be rejected.
+
+  return {
+      verified,
+      scores,
+      reason: verified ? "All attributes match successfully." : "Verification failed due to mismatches.",
+      scrapedData
+  };
+}
+
+module.exports = {
+  scrapeFromKaika,
+  scrapeFromCrunchyroll,
+  verifyItem,
+  router };
+const express = require('express');
+const router = express.Router();
+const userController = require('../controllers/userControllers');
+
+router.post('/register', userController.register);
+router.post('/login', userController.login);
+
+module.exports = router;
+
+<%- include('header') %>
+<div id="page-container">
+<main id="content-wrap">
+<!-- account page, contains users submitted items, their pending items and account info -->
+<div class="right-column">
+    <div>
+      <section id="user-info">
+        <h1>Account Details</h1>
+        <p><strong>Email:</strong> <%- user.email %></p>
+        <p><strong>Name:</strong> <%- user.name %> <%- user.lastname %></p>
+      </section>
+      <section>
+        <h1>Edit Account</h1>
+        <form id="account-form" action="/update-account" method="post">
+          <div>
+            <label for="email">Email:</label>
+            <input type="email" id="email" name="email" value="<%- user.email %>" required>
+          </div>
+          <div>
+            <label for="name">Name:</label>
+            <input type="text" id="name" name="name" value="<%- user.name %>" required>
+          </div>
+          <div>
+            <label for="lastname">Surname:</label>
+            <input type="text" id="lastname" name="lastname" value="<%- user.lastname %>" required>
+          </div>
+          <div>
+            <label for="address">Address:</label>
+            <input type="text" id="address" name="address" value="<%- user.address %>" required>
+          </div>
+          <div>
+            <label for="post-code">Post Code:</label>
+            <input type="text" id="post-code" name="postCode" value="<%- user.post_code %>" required>
+          </div>
+          <div>
+            <label for="city">City:</label>
+            <input type="text" id="city" name="city" value="<%- user.city %>" required>
+          </div>
+          <!-- Password change fields -->
+          <div>
+            <label for="old-password">Old Password:</label>
+            <input type="password" id="old-password" name="oldPassword">
+          </div>
+          <div>
+            <label for="new-password">New Password:</label>
+            <input type="password" id="new-password" name="newPassword">
+          </div>
+          <div>
+            <button type="submit" class="btn">Update Account</button>
+          </div>
+        </form>
+      </section>
+      <!-- user can change all of their account information here   -->
+  </div>
+</div>
+<!-- user views all of their items they have submitted and been verified. items can be edited -->
+  <div class="left-column">
+    <section id="user-items">
+      <h1>Your Items</h1>
+      <% if (typeof items !== 'undefined' && items.length > 0) { %>
+        <% items.forEach(function(item) { %>
+          <div class="item">
+            <img src="/uploads/<%= item.image %>">
+            <a href="/item/<%= item.id %>">
+            <h3><%= item.name %></h3>
+            </a>
+            <p>£<%= item.price %></p>
+          </div>
+        <% }) %>
+      <% } else { %>
+        <p>You have no items listed for sale.</p>
+      <% } %>
+    </section>
+    
+    <section id="action-buttons">
+      <a href="/sellitem" class="btn">Sell Item</a>
+      <a href="/useredititem" class="btn">Edit Item</a>
+    </section>
+  </div>
+<!-- any item that has not been verified returns here and stays here until admin verifies  -->
+  <div class="left-column">
+  <section id="pending-items">
+    <h1>Your Pending Items</h1>
+    <% if (typeof pendingItems !== 'undefined' && pendingItems.length > 0) { %>
+      <% pendingItems.forEach(function(item) { %>
+        <div class="item">
+          <img src="/uploads/<%= item.image %>" alt="Pending Item Image" height="100">
+          <h3><%= item.name %></h3>
+          <p>£<%= item.price %></p>
+          <p>Status: Pending Review</p>
+        </div>
+      <% }) %>
+    <% } else { %>
+      <p>You have no pending items under review.</p>
+    <% } %>
+  </section>
+  </div>
+  
+
+<style>
+  /* Your existing button styles */
+  .btn {
+    padding: 10px 20px;
+    text-decoration: none;
+    color: white;
+    background-color: #007bff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 16px;
+    text-align: center;
+    display: block; /* Make the link fill the container */
+  }
+  
+  .btn:hover {
+    background-color: #0056b3;
+  }
+
+  /* Style inputs and labels for consistency */
+  label {
+    display: block;
+    margin-bottom: 5px;
+  }
+  
+  input[type="email"], input[type="text"], input[type="password"] {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+  }
+  
+  /* Adjust the button width */
+  button.btn {
+    width: 100%;
+    box-sizing: border-box; /* Ensures padding doesn't add to width */
+  }
+</style>
+
+</main>
+<%- include('footer') %>
+</div>
+
+<%- include('header') %>
+
+<div id="page-container">
+  <main id="content-wrap">
+    <div id="cart-container">
+      <div id="cart-items">
+        <!-- simple cart functionality. shows items that have been added by the user from the 
+        basket table. quantity can be changed, whole item amount can be removed, 
+      displays total, can be checked out with a mock checkout process -->
+        <% cartItems.forEach(item => { %>
+          <div class="cart-item">
+            <img src="/uploads/<%= item.image %>" alt="<%= item.name %>" class="cart-item-image">
+            <div class="cart-item-info">
+              <h3><%= item.name %></h3>
+              <p class="cart-item-price">£<%= Number(item.price).toFixed(2) %></p>
+              <input type="number" class="quantity-input" value="<%= item.quantity %>" min="1" onchange="updateQuantity(<%= item.id %>, this.value)">
+              <button class="remove-btn" onclick="removeFromCart(<%= item.id %>)">Remove</button>
+              <p class="item-total">Item total: £<%= (item.price * item.quantity).toFixed(2) %></p>
+            </div>
+          </div>
+        <% }) %>
+        
+      </div>
+      <form action="/process-checkout" method="post">
+        <div class="cart-summary">
+          <h2>Order Summary</h2>
+          <p class="subtotal">Subtotal: £<%= subtotal %></p>
+          <p class="shipping">Shipping: <%= shippingCost === 0 ? 'Free' : '£' + shippingCost %></p>
+          <p class="taxes">Estimated Tax: £<%= estimatedTax %></p>
+          <div class="cart-total">
+            <strong>Grand Total: £<%= cartTotal %></strong>
+          </div>
+          <input type="hidden" name="total_amount" value="<%= cartTotal %>">
+          <button type="submit" class="checkout-btn">Proceed to Checkout</button>
+        </div>
+      </form>
+
+<script>
+    function updateQuantity(itemId, newQuantity) {
+      fetch('/update-cart', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ itemId, newQuantity }),
+      }).then(response => response.json())
+      .then(data => {
+        console.log('Cart updated', data);
+        window.location.reload(); // Refreshes the page
+      })
+      .catch(error => {
+        console.error('Error updating cart:', error);
+      });
+    }
+  
+    function removeFromCart(itemId) {
+      fetch('/remove-from-cart', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ itemId }),
+      }).then(response => response.json())
+      .then(data => {
+        console.log('Item removed', data);
+        window.location.reload(); // Refreshes the page
+      })
+      .catch(error => {
+        console.error('Error removing item from cart:', error);
+      });
+    }
+  </script>
+  
+</main>
+<%- include('footer') %>
+</div>
+
+<link rel="stylesheet" href="/styles.css"> 
+
+<%- include('header') %>
+<!-- products are selected based on category, for every category a different page is made
+items are then refined to each page via category -->
+<!-- item filters are made here to filter by name, price, manufacturer etc. dynamic -->
+<div id="page-container">
+  <main id="content-wrap" class="main-flex-container">
+    <aside class="filter-sidebar">
+    <form action="/category/<%= title %>" method="GET" class="filter-form">
+      <label for="sort">Sort by:</label>
+      <select name="sort" id="sort">
+          <option value="name_asc" <%= currentSort === 'name_asc' ? 'selected' : '' %>>Name (A-Z)</option>
+          <option value="name_desc" <%= currentSort === 'name_desc' ? 'selected' : '' %>>Name (Z-A)</option>
+          <option value="price_asc" <%= currentSort === 'price_asc' ? 'selected' : '' %>>Price (Low to High)</option>
+          <option value="price_desc" <%= currentSort === 'price_desc' ? 'selected' : '' %>>Price (High to Low)</option>
+      </select>
+      <label for="manufacturer">Manufacturer:</label>
+      <select name="manufacturer" id="manufacturer">
+          <option value="">All Manufacturers</option>
+          <% manufacturers.forEach(function(man) { %>
+              <option value="<%= man.manufacturer %>" <%= man.manufacturer === selectedManufacturer ? 'selected' : '' %>><%= man.manufacturer %></option>
+          <% }) %>
+      </select>
+      <button type="submit">Apply Filters</button>
+    </form>
+    </aside>
+    <!-- Products  -->
+    <section class="products-grid">
+      <% items.forEach(item => { %>
+        <article class="product-card">
+          <a href="/item/<%= item.id %>">
+            <h2 class="product-name"><%= item.name %></h2>
+            <img src="/uploads/<%= item.image %>" alt="Product Image" class="product-image">
+          </a>
+          <p class="product-price">£<%= item.price %></p>
+          <button class="product-add-button" onclick="addToBasket('<%= item.id %>')">Quick Buy</button>
+        </article>
+      <% }); %>
+    </section>
+  </main>
+  <%- include('footer') %>
+</div>
+
+<script>
+var userData = {
+  userId: <%- JSON.stringify(user ? user.id : null) %>
+};
+
+function addToBasket(itemId) {
+  const quantity = 1; // Default quantity of 1
+  fetch('/add-to-basket', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ itemId, quantity, userId: userData.userId }),
+  })
+  .then(response => response.json())
+  .then(data => {
+    console.log('Item added to basket', data);
+  })
+  .catch(error => {
+    console.error('Error adding item to basket:', error);
+  });
+}
+</script>
+
+<link rel="stylesheet" href="/styles.css"> 
+
+<%- include('header') %>
+<!-- admin dashboard. contains all of the items verified and submitted by users.
+has search functionality that uses the id, name, and manufacturer to refine the results.
+admins can edit view or delete any items-->
+<div id="page-container">
+  <main id="content-wrap">
+    <form id="searchForm">
+      <input type="text" placeholder="Search Items..." name="q" id="searchInput">
+      <button type="submit">Search</button>
+    </form>
+    <div id="searchResults">
+      <table>
+          <thead>
+              <tr>
+                  <th>ID</th>
+                  <th>Name</th>
+                  <th>Description</th>
+                  <th>Category</th>
+                  <th>Price</th>
+                  <th>Size</th>
+                  <th>Material</th>
+                  <th>Manufacturer</th>
+                  <th>Actions</th>
+              </tr>
+          </thead>
+          <tbody id="searchResultsBody">
+            <% if (typeof items !== 'undefined' && items.length > 0) { %>
+              <% items.forEach(function(item) { %>
+                <tr>
+                  <td><%= item.id %></td>
+                  <td><%= item.name %></td>
+                  <td class="description-cell"><%= item.description %></td>
+                  <td><%= item.category %></td>
+                  <td>£<%= parseFloat(item.price) %></td>
+                  <td><%= item.size %></td>
+                  <td><%= item.material %></td>
+                  <td><%= item.manufacturer %></td>
+                  <td>
+                    <a href="/item/<%= item.id %>">View</a>
+                    <a href="/admin/items/delete/<%= item.id %>" onclick="return confirm('Are you sure you want to delete this item?');">Delete</a>
+                    <a href="/admin/items/edit/<%= item.id %>">Edit</a>
+                  </td>
+                </tr>
+              <% }) %>
+            <% } else { %>
+              <tr><td colspan="9">No items found.</td></tr>
+            <% } %>
+          </tbody>
+      </table>
+      </div>
+  </main>
+<%- include('footer') %>
+</div>
+<script>
+// Handle form submission AJAX
+document.getElementById('searchForm').addEventListener('submit', async (event) => {
+  event.preventDefault(); 
+  const searchTerm = document.getElementById('searchInput').value.trim(); // Get the search term
+  if (!searchTerm) {
+    alert('Please enter a search term');
+    return;
+  }
+
+  try {
+    const response = await fetch(`/dashboard/search?q=${encodeURIComponent(searchTerm)}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch results');
+    }
+    const items = await response.json();
+
+    const searchResultsBody = document.getElementById('searchResultsBody');
+    searchResultsBody.innerHTML = ''; // Clear existing results
+
+    items.forEach(item => {
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${item.id}</td>
+        <td>${item.name}</td>
+        <td>${item.description}</td>
+        <td>${item.category}</td>
+        <td>£${parseFloat(item.price)}</td>
+        <td>${item.size}</td>
+        <td>${item.material}</td>
+        <td>${item.manufacturer}</td>
+        <td>
+          <a href="/item/${item.id}">View</a>
+          <a href="/admin/items/delete/${item.id}" onclick="return confirm('Are you sure you want to delete this item?');">Delete</a>
+          <a href="/admin/items/edit/${item.id}">Edit</a>
+        </td>
+      `;
+      searchResultsBody.appendChild(row); // Add new rows
+    });
+  } catch (error) {
+    console.error('Error during search:', error);
+    alert('Error fetching search results');
+  }
+});
+</script>
+<!-- css generated by chat gpt with prompt 'enhance the layout and make this readable' -->
+<style>
+  table {
+    width: 99%;
+    border-collapse: collapse;
+    margin:10px;
+  }
+  table, th, td {
+    border: 1px solid #ddd;
+    text-align: left;
+    padding: 8px;
+  }
+  th {
+    background-color: #f2f2f2;
+  }
+  tr:nth-child(even) {
+    background-color: #f9f9f9;
+  }
+  tr:hover {
+    background-color: #e8e8e8;
+  }
+  .description {
+    max-width: 300px; /* Adjust as needed */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .description-cell {
+    max-height: 80px; /* Fixed height for the cell */
+    overflow-y: auto; /* Vertical scrolling */
+    overflow-x: hidden; /* Hide horizontal scroll */
+  }
+
+  #searchForm {
+  display: flex;
+  justify-content: center; /* Centers the form in the middle of the page */
+  padding: 20px;
+  gap: 10px; /* Space between input and button */
+}
+
+#searchInput {
+  width: 100%;
+  max-width: 300px; /* Maximum width of the search input */
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+#searchForm button {
+  padding: 10px 15px;
+  background-color: #007bff; /* Button background color */
+  color: white; /* Button text color */
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.3s;
+}
+
+#searchForm button:hover {
+  background-color: #0056b3;
+}
+
+/* Responsive adjustments for smaller screens */
+@media (max-width: 768px) {
+  #searchForm {
+    flex-direction: column; /* Stack input and button vertically on small screens */
+  }
+
+  #searchInput,
+  #searchForm button {
+    width: calc(100% - 40px); /* Full width minus padding */
+  }
+}
+</style>
+
+<%- include('header') %>
+<div id="page-container">
+<main id="content-wrap">
+  <!-- page that contains all the failed listings. the listings are shown against the 
+  scraped data for comparison if any. from then on the admin can decide if they wish to reject
+or accept it. the tables are appended -->
+    <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th colspan="2">Name</th>
+            <th>Description</th>
+            <th>Price</th>
+            <th>Size</th>
+            <th>Manufacturer</th>
+            <th>Material</th>
+            <th>Image</th>
+            <th colspan="2">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% failedListings.forEach(listing => { %>
+          <tr>
+            <td rowspan="2"><%= listing.id %></td>
+            <td>Form</td>
+            <td><%= listing.fl_name %></td>
+            <td class="scrollable-cell"><%= listing.fl_description %></td>
+            <td><%= listing.fl_price %></td>
+            <td><%= listing.fl_size %></td>
+            <td><%= listing.fl_manufacturer %></td>
+            <td><%= listing.fl_material %></td>
+            <td><img src="/uploads/<%= listing.fl_image %>" alt="Normal Image" height="50" /></td>
+            <td rowspan="2">
+              <button onclick="verifyListing(<%= listing.id %>)">Verify</button>
+            </td>
+            <td rowspan="2">
+              <button onclick="rejectListing(<%= listing.id %>)">Reject</button>
+            </td>
+          </tr>
+          <tr>
+            <td>Scraped</td>
+            <td><%= listing.sd_name %></td>
+            <td class="scrollable-cell"><%= listing.sd_description %></td>
+            <td><%= listing.sd_price %></td>
+            <td><%= listing.sd_size %></td>
+            <td><%= listing.sd_manufacturer %></td>
+            <td><%= listing.sd_material %></td>
+            <td><img src="<%= listing.sd_image %>" alt="Scraped Image" height="50" /></td>
+          </tr>
+          <% }); %>
+        </tbody>
+      </table>
+      
+
+    <script>
+        function verifyListing(id) {
+            // Implement the fetch API to send a verify request
+            fetch(`/dashboardlistings/verify-listing/${id}`, { method: 'POST' })
+            .then(response => location.reload())
+            .catch(error => console.error('Error verifying listing:', error));
+        }
+
+        function rejectListing(id) {
+            // Implement the fetch API to send a reject request
+            fetch(`/dashboardlistings/reject-listing/${id}`, { method: 'POST' })
+            .then(response => location.reload())
+            .catch(error => console.error('Error rejecting listing:', error));
+        }
+    </script>
+</main>
+<%- include('footer') %>
+</div>
+<%- include('header') %>
+<!-- page that contains ALL of the users; admins and customers alike. search bar can be used
+to check for id, email address, address, city etc.  -->
+<div id="page-container">
+  <main id="content-wrap">
+    <form id="searchForm">
+      <input type="text" placeholder="Search Items..." name="q" id="searchInput">
+      <button type="submit">Search</button>
+    </form>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Email</th>
+          <th>Name</th>
+          <th>Address</th>
+          <th>Post Code</th>
+          <th>City</th>
+          <th>Role</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="searchResultsBody">
+        <% users.forEach(user => { %>
+          <tr>
+            <td><%= user.id %></td>
+            <td><%= user.email %></td>
+            <td><%= user.name %> <%= user.lastname %></td>
+            <td><%= user.address %></td>
+            <td><%= user.post_code %></td>
+            <td><%= user.city %></td>
+            <td><%= user.role %></td>
+            <td>
+              <a href="/admin/users/edit/<%= user.id %>">Edit</a> |
+              <a href="/admin/users/delete/<%= user.id %>" onclick="return confirm('Are you sure you want to delete this user?');">Delete</a>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </main>
+<%- include('footer') %>
+</div>
+<script>
+document.getElementById('searchForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const searchTerm = document.getElementById('searchInput').value.trim();
+  if (!searchTerm) {
+    alert('Please enter a search term');
+    return;
+  }
+
+  try {
+    const response = await fetch(`/dashboardusers/search?q=${encodeURIComponent(searchTerm)}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch results');
+    }
+    const users = await response.json();
+
+    const resultsTable = document.getElementById('searchResultsBody');
+    resultsTable.innerHTML = ''; // Clear previous results
+
+    users.forEach(user => {
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${user.id}</td>
+        <td>${user.email}</td>
+        <td>${user.name} ${user.lastname}</td>
+        <td>${user.address}</td>
+        <td>${user.post_code}</td>
+        <td>${user.city}</td>
+        <td>${user.role}</td>
+        <td>
+          <a href="/admin/users/edit/${user.id}">Edit</a> |
+          <a href="/admin/users/delete/${user.id}" onclick="return confirm('Are you sure you want to delete this user?');">Delete</a>
+        </td>
+      `;
+      resultsTable.appendChild(row);
+    });
+  } catch (error) {
+    console.error('Error during search:', error);
+    alert('Error fetching search results');
+  }
+});
+</script>
+  
+<link rel="stylesheet" href="/styles.css"> 
+
+<%- include('header') %>
+<!-- the form where the admin can edit a users item-->
+<div id="page-container">
+    <main id="content-wrap">
+        <main id="form-wrap">
+        <h1>Edit Item</h1>
+        <form action="/admin/items/edit/<%= item.id %>" method="post">
+            <label for="name">Name:</label>
+            <input type="text" id="name" name="name" value="<%= item.name %>" required>
+
+            <label for="description">Description:</label>
+            <input type="text" id="description" name="description" value="<%= item.description %>" required>
+
+            <label for="price">Price:</label>
+            <input type="number" step="0.01" id="price" name="price" value="<%= item.price %>" required>
+
+            <label for="category">Category:</label>
+            <input type="text" id="category" name="category" value="<%= item.category %>" required>
+
+            <label for="size">Size:</label>
+            <input type="text" id="size" name="size" value="<%= item.size %>" required>
+
+            <label for="material">Material:</label>
+            <input type="text" id="material" name="material" value="<%= item.material %>" required>
+
+            <label for="manufacturer">Manufacturer:</label>
+            <input type="text" id="manufacturer" name="manufacturer" value="<%= item.manufacturer %>" required>
+
+            <button type="submit">Update Item</button>
+        </form>
+        </main>
+    </main>
+<%- include('footer') %>
+</div>
+<link rel="stylesheet" href="/styles.css"> 
+<%- include('header') %>
+<div id="page-container">
+  <!-- form for the admin to edit a selected users information.  -->
+  <main id="content-wrap">
+    <main id="form-wrap">
+    <h1>Edit User</h1>
+    <form action="/admin/users/edit/<%= user.id %>" method="post">
+        <label>Email:</label>
+        <input type="email" name="email" value="<%= user.email %>" required>
+        
+        <label>Name:</label>
+        <input type="text" name="name" value="<%= user.name %>" required>
+        
+        <label>Lastname:</label>
+        <input type="text" name="lastname" value="<%= user.lastname %>" required>
+        
+        <label>Address:</label>
+        <input type="text" name="address" value="<%= user.address %>" required>
+        
+        <label>Post Code:</label>
+        <input type="text" name="post_code" value="<%= user.post_code %>" required>
+        
+        <label>City:</label>
+        <input type="text" name="city" value="<%= user.city %>" required>
+        
+        <label>Role:</label>
+        <select name="role" required>
+          <option value="customer" <% if (user.role === 'customer') { %>selected<% } %>>Customer</option>
+          <option value="admin" <% if (user.role === 'admin') { %>selected<% } %>>Admin</option>
+        </select>
+        <button type="submit">Update User</button>
+      </form>
+      </main>
+  </main>
+<%- include('footer') %>
+</div>
+
+<br>
+<footer>
+  <!-- basic footer that remains at the bottom of the screen, has some links -->
+    <div id="footer-content">
+      <nav id="footer-nav">
+        <a href="/">Home</a>
+        <a href="/about">About Us</a>
+        <a href="/service">Services</a>
+        <a href="/contact">Contact</a>
+        <a href="/term">Terms of Service</a>
+      </nav>
+
+      <div id="social-media">
+        <a href="https://facebook.com" target="_blank"><i class="fab fa-facebook"></i> Facebook</a>
+        <a href="https://twitter.com" target="_blank"><i class="fab fa-twitter"></i> Twitter</a>
+        <a href="https://instagram.com" target="_blank"><i class="fab fa-instagram"></i> Instagram</a>
+        <a href="https://linkedin.com" target="_blank"><i class="fab fa-linkedin"></i> LinkedIn</a>
+      </div>
+    </div>
+  </footer>
+
+  
+</body>
+</html>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ecom</title>
+  <link rel="stylesheet" href="styles.css"> 
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.1/css/all.min.css">
+<!-- simple header for both customer and admins, both have different links dependant on role  -->
+</head>
+<body>
+  <header class="site-header">
+    <div class="top-header">
+      <a href="/" class="logo-link">
+        <img src="/uploads/logo.png" alt="Website Logo" class="header-logo">
+      </a>
+      <div class="search-container">
+        <form action="/search" method="GET">
+          <input type="text" placeholder="Search..." name="q">
+          <button type="submit">🔍</button>
+        </form>
+      </div>
+      <div class="account-links">
+        <% if (user) { %>
+            <% if (user.role === 'admin') { %>
+                <!-- Direct links for adminsm admins must be logged in -->
+                <span class="welcome-message">Welcome, <%= user.name %></span>
+                <a href="/dashboard">Admin Dashboard</a>
+                <a href="/dashboardusers">Manage Users</a>
+                <a href="/dashboardlistings">Failed Listings</a>
+                <a href="/logout">Log Out</a>
+            <% } else { %>
+                <!-- Dropdown menu for regular users -->
+                <div class="account-menu">
+                    <span class="welcome-message">Welcome, <%= user.name %><i class="fas fa-caret-down"></i></span>
+                    <div class="dropdown-content">
+                        <a href="/account">Your Account</a>
+                        <a href="/sellitem">Sell Item</a>
+                        <a href="/logout">Log Out</a>
+                    </div>
+                </div>
+                <a href="/orders">Orders</a>
+                <a href="/cart">Basket</a>
+            <% } %>
+        <% } else { %>
+            <a href="/login">Sign in</a>
+        <% } %>
+    </div>
+</div>    
+    <div class="bottom-header">
+      <nav class="category-nav">
+      </nav>
+      <nav class="category-nav">
+        <a href="/">Home</a>
+        <a href="/category/clothes">Clothes</a>
+        <a href="/category/figures">Figures</a>
+        <a href="/category/household">Household</a>
+        <a href="/category/accessories">Accessories</a>
+        <a href="/category/mangas">Mangas</a>
+      </nav>
+    </div>
+  </header>
+  
+</body>
+
+<%- include('header') %>
+
+<div id="page-container">
+  <main id="content-wrap">
+    <h2></h2>
+    <p></p>
+<script>
+fetch('/indexitems')
+  .then(response => response.json())
+  .then(indexitems => {
+    const itemsContainer = document.getElementById('indexitems');
+    itemsContainer.innerHTML = ''; 
+    indexitems.forEach(item => {
+      itemsContainer.innerHTML += `
+        <div class="item">
+          <a href="/item/${item.id}">
+          <img src="/uploads/${item.image}">
+          <h3>${item.name}</h3>
+          </a>
+          <p>£${item.price}</p>
+        </div>
+      `;
+    });
+  });
+
+var userData = {
+    userId: <%- JSON.stringify(user ? user.id : null) %>
+  };
+</script> 
+
+<%- include('footer') %>
+</div>
+<link rel="stylesheet" href="/styles.css"> 
+<%- include('header') %>
+
+<div id="page-container">
+    <main id="content-wrap">
+      <section id="itempage" class="item-container">
+        <div class="item-image">
+          <% if(item.image) { %>
+            <img src="/uploads/<%= item.image %>" alt="<%= item.name %>">
+          <% } else { %>
+            <p>No image available</p>
+          <% } %>
+        </div>
+  <!-- code to get the item page. each item as all of its relevant information and similar categories, which is based on its own category
+  you can add to basket with the button, which updates the basket -->
+        <div class="item-details">
+          <h1><%= item.name %></h1>
+          <p class="item-description"><%= item.description %></p>
+          <p class="item-price">Price: £<%= item.price %></p>
+          <ul class="item-meta">
+            <li><strong>Size:</strong> <%= item.size %></li>
+            <li><strong>Material:</strong> <%= item.material %></li>
+            <li><strong>Manufacturer:</strong> <%= item.manufacturer %></li>
+          </ul>
+          <button onclick="addToBasket('<%= item.id %>')">Add to Basket</button>
+        </div>    
+      </section>
+      <section id="similar-items">
+        <h2>Similar Items</h2>
+        <div class="items">
+          <% similarItems.forEach(similarItem => { %>
+            <div class="similar-item">
+              <a href="/item/<%= similarItem.id %>">
+                <img src="/uploads/<%= similarItem.image %>">
+                <h3><%= similarItem.name %></h3>
+              </a>
+              <p>£<%= similarItem.price %></p>
+            </div>
+          <% }); %>
+        </div>
+      </section>      
+    </main>
+    <script src="/routes/cart.js"></script>
+    <script>
+       
+        var userData = {
+          userId: <%- JSON.stringify(user ? user.id : null) %>
+        };
+        
+        function addToBasket(itemId) {
+          const quantity = 1; // Assuming a default quantity of 1 
+        
+          fetch('/add-to-basket', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ itemId, quantity, userId: userData.userId }),
+          })
+          .then(response => response.json())
+          .then(data => {
+            console.log('Item added to basket', data);
+          })
+          .catch(error => {
+            console.error('Error adding item to basket:', error);
+          });
+        }
+        </script>
+
+<%- include('footer') %>
+</div>
+<%- include('header') %>
+<div id="page-container">
+  <main id="content-wrap">
+<div class="form-container">
+<!-- forms for login and registration, made it easier to add both in one. 
+they have different post methods  -->
+  <div class="form-box">
+    <h2>Login</h2>
+    <form action="/login" method="POST">
+      <div class="form-group">
+        <label for="email">Email:</label>
+        <input type="text" id="email" name="email" required>
+      </div>
+      <div class="form-group">
+        <label for="password">Password:</label>
+        <input type="password" id="password" name="password" required>
+      </div>
+      <button type="submit">Login</button>
+    </form>
+  </div>
+
+  <div class="form-box">
+    <h2>Register</h2>
+    <form action="/register" method="POST">
+      <div class="form-group">
+        <label for="reg-email">Email:</label>
+        <input type="email" id="reg-email" name="email" required>
+      </div>
+      <div class="form-group">
+        <label for="name">First Name:</label>
+        <input type="text" id="name" name="name" required>
+      </div>
+      <div class="form-group">
+        <label for="lastname">Last Name:</label>
+        <input type="text" id="lastname" name="lastname" required>
+      </div>
+      <div class="form-group">
+        <label for="address">Address:</label>
+        <input type="text" id="address" name="address" required>
+      </div>
+      <div class="form-group">
+        <label for="post-code">Post Code:</label>
+        <input type="text" id="post-code" name="postCode" required>
+      </div>
+      <div class="form-group">
+        <label for="city">City:</label>
+        <input type="text" id="city" name="city" required>
+      </div>
+      <div class="form-group">
+        <label for="reg-password">Password:</label>
+        <input type="password" id="reg-password" name="password" required>
+      </div>
+      <div class="form-group">
+        <label for="repeat-password">Repeat Password:</label>
+        <input type="password" id="repeat-password" name="repeatPassword" required>
+      </div>
+      <button type="submit">Register</button>
+    </form>
+  </div>
+  
+</div>
+</main>
+<%- include('footer') %>
+</div>
+<%- include('header') %>
+<div id="page-container">
+  <main id="content-wrap">
+    <!-- page where the user can view all of their orders -->
+    <% if (orders.length > 0) { %>
+      <div class="orders-list">
+        <% orders.forEach(order => { %>
+          <li>
+            <h3>Order ID: <%= order.id %></h3>
+            <p>Total Amount: £<%= order.total_amount %></p>
+            <p>Status: <%= order.status %></p>
+            <p>Ordered On: <%= new Date(order.created_at).toISOString().substring(0, 10) %></p>
+            <ul>
+              <% order.item_details.split(',').forEach(function(detail) { 
+                   var parts = detail.split(':'); 
+                   var itemId = parts[0];
+                   var itemName = parts[1]; %>
+                <li><a href="/item/<%= itemId %>"><%= itemName %></a></li>
+              <% }); %>
+            </ul>
+          </li>
+        <% }); %>
+      </div>
+    <% } else { %>
+      <p>You have no orders.</p>
+    <% } %>
+  </main>
+<%- include('footer') %>
+</div>
+
+<%- include('header') %>
+
+<div id="page-container">
+  <main id="content-wrap">
+    <h1>Search Results for "<%= searchTerm %>"</h1>
+<!-- simple search functionality using the names of the items, this displays all like items -->
+    <section class="products-grid">
+      <% if (items.length === 0) { %>
+        <p>No results found.</p>
+      <% } else { %>
+        <% items.forEach(item => { %>
+          <article class="product-card">
+            <a href="/item/<%= item.id %>">
+              <h2 class="product-name"><%= item.name %></h2>
+            </a>
+            <img src="/uploads/<%= item.image %>" alt="Product Image" class="product-image">
+            <p class="product-description"><%= item.description %></p>
+            <p class="product-price">£<%= item.price %></p>
+            <button class="product-add-button" onclick="addToBasket('<%= item.id %>')">Add to Cart</button>
+          </article>
+        <% }); %>
+      <% } %>
+    </section>
+  </main>
+<%- include('footer') %>
+</div>
+<%- include('header') %>
+<div id="page-container">
+<main id="content-wrap">
+<!-- form for the user to submit their item. they choose from the category
+and enter in the details. details are then checked against the verifier -->
+    <form id="submitListingForm" action="/submit-listing" method="post" enctype="multipart/form-data">
+        <label for="name">Item Name:</label>
+        <input type="text" id="name" name="name" required><br>
+    
+        <label for="category">Category:</label>
+        <select id="category" name="category" required onchange="updateCategoryFields()">
+            <option value="">Select a Category</option>
+            <option value="Figures">Figures</option>
+            <option value="Clothes">Clothes</option>
+            <option value="Household">Household</option>
+            <option value="Accessories">Accessories</option>
+            <option value="Mangas">Mangas</option>
+        </select><br>
+
+        <label for="description">Description:</label>
+        <textarea id="description" name="description" required></textarea><br>
+    
+        <label for="price">Price:</label>
+        <input type="number" id="price" name="price" step="0.01" required><br>
+    
+        <div id="figuresFields" class="categoryFields" style="display:none;">
+          <label for="figuresSize">Size (inches):</label>
+          <input type="text" id="figuresSize" name="figuresSize"><br>
+      
+          <label for="figuresMaterial">Material:</label>
+          <input type="text" id="figuresMaterial" name="figuresMaterial"><br>
+      
+          <label for="figuresManufacturer">Manufacturer:</label>
+          <input type="text" id="figuresManufacturer" name="figuresManufacturer"><br>
+      </div>
+
+      <div id="clothesFields" class="categoryFields" style="display:none;">
+        <label for="clothesSize">Size:</label>
+        <select id="clothesSize" name="clothesSize">
+                <option value="">Select Size</option>
+                <option value="XS">XS</option>
+                <option value="S">S</option>
+                <option value="M">M</option>
+                <option value="L">L</option>
+                <option value="XL">XL</option>
+            </select><br>
+        
+            <label for="clothesMaterial">Material:</label>
+            <input type="text" id="clothesMaterial" name="clothesMaterial"><br>
+        
+            <label for="clothesManufacturer">Brand:</label>
+            <input type="text" id="clothesManufacturer" name="clothesManufacturer"><br>
+        </div>
+
+        <div id="householdFields" class="categoryFields" style="display:none;">
+            <label for="householdSize">Size:</label>
+            <input type="text" id="householdSize" name="householdSize"><br>
+        
+            <label for="householdMaterial">Material:</label>
+            <input type="text" id="householdMaterial" name="householdMaterial"><br>
+        </div>
+        
+        <div id="accessoriesFields" class="categoryFields" style="display:none;">
+            <label for="accessoriesSize">Size(inches):</label>
+            <input type="text" id="accessoriesSize" name="accessoriesSize"><br>
+        
+            <label for="accessoriesMaterial">Material:</label>
+            <input type="text" id="accessoriesMaterial" name="accessoriesMaterial"><br>
+
+            <label for="accessoriesManufacturer">Manufacturer:</label>
+            <input type="text" id="accessoriesManufacturer" name="accessoriesManufacturer"><br>
+        </div>
+    
+        <div id="mangasFields" class="categoryFields" style="display:none;">
+        </div>
+
+        <label for="image">Image:</label>
+        <input type="file" id="image" name="image" accept="image/*"><br>
+    
+        <input type="submit" value="Submit Listing">
+    </form>
+
+</main>
+<%- include('footer') %>
+</div>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+  updateCategoryFields();
+});
+function updateCategoryFields() {
+  // Hide all fields initially
+  var allFields = document.querySelectorAll('.categoryFields');
+  allFields.forEach(fieldsContainer => {
+    fieldsContainer.style.display = 'none';
+    var inputs = fieldsContainer.querySelectorAll('input, select');
+    inputs.forEach(input => {
+      input.removeAttribute('required');
+    });
+  });
+
+  // Get the selected category and convert it to the expected id format
+  var selectedCategory = document.getElementById('category').value;
+  // convert the category to lowercase
+  var fieldsToShowId = selectedCategory.toLowerCase() + 'Fields';
+  var fieldsToShow = document.getElementById(fieldsToShowId);
+
+  // Show fields for selected category and set them required
+  if (fieldsToShow) {
+    fieldsToShow.style.display = 'block';
+    var inputsToShow = fieldsToShow.querySelectorAll('input, select');
+    inputsToShow.forEach(input => {
+      if (input.type !== 'file') {
+        input.setAttribute('required', '');
+      }
+    });
+  }
+}
+
+// Run updateCategoryFields on page load & when the category changes
+document.addEventListener('DOMContentLoaded', updateCategoryFields);
+document.getElementById('category').addEventListener('change', updateCategoryFields);
+
+</script>
+
+<script type="text/javascript">
+  window.onload = function() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const error = urlParams.get('error');
+    const info = urlParams.get('info');
+
+    if (error) {
+      alert(decodeURIComponent(error));
+    } else if (info) {
+      alert(decodeURIComponent(info));
+    }
+  }
+</script>
+<link rel="stylesheet" href="/styles.css"> 
+
+<%- include('header') %>
+<!-- page for the user to edit their own items-->
+<div id="page-container">
+    <main id="content-wrap">
+        <form id="itemSelectionForm">
+            <select id="itemSelector" name="item_id" required>
+                <option value="">Select an Item</option>
+                <% items.forEach(item => { %>
+                    <option value="<%= item.id %>"><%= item.name %></option>
+                <% }) %>
+            </select><!-- user picks their item from the list-->
+            <button type="button" onclick="loadItemDetails()">Load Details</button>
+        </form> <!-- after the item is loaded, they can proceed with any changes -->
+        <form id="itemEditForm" style="display: none;">
+            <input type="hidden" id="editItemId" name="id">
+            <label for="editItemName">Name:</label>
+            <input type="text" id="editItemName" name="name" required><br>
+            <label for="editItemDescription">Description:</label>
+            <textarea id="editItemDescription" name="description" required></textarea><br>
+            <label for="editItemPrice">Price:</label>
+            <input type="number" step="0.01" id="editItemPrice" name="price" required><br>
+            <label for="editItemSize">Size:</label>
+            <input type="text" id="editItemSize" name="size"><br>
+            <label for="editItemManufacturer">Manufacturer:</label>
+            <input type="text" id="editItemManufacturer" name="manufacturer"><br>
+            <label for="editItemMaterial">Material:</label>
+            <input type="text" id="editItemMaterial" name="material"><br>
+            <label for="editItemCategory">Category:</label>
+            <input type="text" id="editItemCategory" name="category" required><br>
+
+            <button type="submit">Submit Changes</button>
+        </form>
+        
+        <!-- scripts to get the items and the values dynamically -->
+        <script>
+        document.getElementById('itemSelectionForm').addEventListener('change', function() {
+            loadItemDetails();
+        });
+        
+        async function loadItemDetails() {
+            const itemId = document.getElementById('itemSelector').value;
+            if (!itemId) return;
+        
+            try {
+                const response = await fetch(`/user/edit-item?item_id=${itemId}`);
+                const item = await response.json();
+                if (item) {
+                    document.getElementById('editItemId').value = item.id;
+                    document.getElementById('editItemName').value = item.name;
+                    document.getElementById('editItemDescription').value = item.description;
+                    document.getElementById('editItemPrice').value = item.price;
+                    document.getElementById('editItemMaterial').value = item.material;
+                    document.getElementById('editItemManufacturer').value = item.manufacturer;
+                    document.getElementById('editItemCategory').value = item.category;
+                    document.getElementById('itemEditForm').style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Failed to fetch item details:', error);
+            }
+        }
+        
+        document.getElementById('itemEditForm').addEventListener('submit', async function(event) {
+            event.preventDefault();
+            const formData = new FormData(this);
+            try {
+                const response = await fetch('/user/update-item', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.text();
+                alert(result);
+            } catch (error) {
+                console.error('Failed to update item:', error);
+            }
+        });
+        </script>
+
+    </main>
+  <%- include('footer') %>
+</div>
+// all libraries and dependencies
+require('dotenv').config();
+const db = require('./config/database');
+const express = require('express');
+const session = require('express-session');
+const userRoutes = require('./routes/users');
+const passport = require('passport');
+const flash = require('connect-flash');
+require('./config/passport')(passport); 
+const authRouter = require('./routes/auth');
+const pageRouter = require('./routes/pages');
+const logoutRoute = require('./routes/auth');
+const cartRoutes = require('./routes/cart');
+const { router: scraperRoutes, scrapeFromKaika, scrapeFromCrunchyroll, verifyItem  } = require('./routes/scraper');
+const stringSimilarity = require('string-similarity');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+//configure storage for saving the form image
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+      cb(null, 'uploads'); 
+  },
+  filename: (req, file, cb) => {
+      cb(null, `image_${Date.now()}_${file.originalname}`);
+  }
+});
+
+const upload = multer({ storage });
+
+const app = express();
+
+app.set('view engine', 'ejs');
+
+app.use(express.static('public'));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json()); 
+
+app.use(express.static(path.join(__dirname, 'public')));
+//initialise the passport for the sessions
+app.use(session({
+  secret: process.env.SECRET_KEY, 
+  resave: false,
+  saveUninitialized: true,
+  cookie: { secure: false } 
+}));
+app.use(passport.initialize());
+app.use(passport.session());
+app.use((req, res, next) => {
+  
+  res.locals.user = req.user || null;
+  next();
+});
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use(flash());
+app.use('/', cartRoutes);
+app.get('/', (req, res) => {
+  res.render('index', { title: 'Home' });
+});
+//index item images, picks 10 randomly
+app.get('/indexitems', (req, res) => {
+  const sql = 'SELECT * FROM items ORDER BY RAND() LIMIT 10';
+  db.query(sql)
+  .then(([results, fields]) => {
+    res.json(results);
+  })
+  .catch(err => {
+    console.error(err);
+    res.status(500).send('Database query failed');
+  });
+});
+//
+app.get('/sell-item', (req, res) => {
+  res.render('sellitem',{ query: req.query });
+});
+//flash messages
+app.use((req, res, next) => {
+  res.locals.error_msg = req.flash('error_msg');
+  res.locals.error = req.flash('error'); 
+  res.locals.success_msg = req.flash('success_msg');
+  next();
+});
+//declare middleware for the files
+const uploadMiddleware = (req, res, next) => {
+  upload.single('image')(req, res, function(err) {
+    if (err instanceof multer.MulterError) {
+      console.error('MulterError:', err);
+      return res.status(500).send(`Multer error: ${err.message}`);
+    } else if (err) {
+      console.error('Unknown Error:', err);
+      return res.status(500).send(`Unknown error: ${err.message}`);
+    }
+    next();
+  });
+};
+//null values in case insert values are null
+function toNull(value) {
+  return value === undefined ? null : value;
+}
+//handling the full verification logic
+//take both the scraped data and the form data
+async function handleVerification(res, params, verificationResult, userId) {
+  const { name, description, price, size, manufacturer, material, category, uploadedImagePath } = params;
+  const { verified, scores, scrapedData } = verificationResult;
+  const uploadsBasePath = path.join(__dirname, 'uploads');
+//logged the data for checking
+  console.log("Form Data:");
+  console.log(`Name: ${name}, Description: ${description}, Price: ${price}, Size: ${size}, Manufacturer: ${manufacturer}, Material: ${material}, Category: ${category}`);
+  
+  console.log("Scraped Data:");
+  console.log(`Name: ${scrapedData.name}, Description: ${scrapedData.description}, Price: ${scrapedData.price}, Size: ${scrapedData.size}, Manufacturer: ${scrapedData.manufacturer}, Material: ${scrapedData.material}, Category: ${scrapedData.category}`);
+  
+  console.log("Verification Scores:");
+  console.log(scores);
+
+  if (verified) {
+    // get the verified item into the items table
+    const insertItem = `INSERT INTO items (name, description, price, size, manufacturer, material, category, image, seller_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    const [insertResult] = await db.execute(insertItem, [
+        name, description, price, size, manufacturer, material, category, '', userId
+    ]);
+
+    // get the newly inserted item id
+    const newItemId = insertResult.insertId;
+    const newImageName = `${newItemId}${path.extname(uploadedImagePath)}`;
+    const newImagePath = path.join(uploadsBasePath, newImageName);
+
+    // rename uploaded image file
+    try {
+        fs.renameSync(uploadedImagePath, newImagePath);
+        // Update items table with new image name
+        const updateItem = `UPDATE items SET image = ? WHERE id = ?`;
+        await db.execute(updateItem, [newImageName, newItemId]);
+    } catch (error) {
+        console.error('Error renaming image file:', error);
+        return { success: false, message: 'Error processing the image file' };
+    }
+      
+      // remove any existing records from failedlistings
+      const deleteFailedListing = `DELETE FROM failedlistings WHERE name = ? AND seller_id = ?`;
+      await db.execute(deleteFailedListing, [name, userId]);
+
+      return res.redirect('/account?success=Listing has been successfully submitted and verified.');
+  } else {
+      // Check if listing already exists in failedlistings
+      const selectFailedListing = `SELECT * FROM failedlistings WHERE name = ? AND seller_id = ?`;
+      const [failedListing] = await db.query(selectFailedListing, [name, userId]);
+      const uploadedImageFilename = path.basename(uploadedImagePath);
+      if (failedListing && failedListing.length > 0) {
+          // increment verification attempts if already exists
+          const failedListingId = failedListing[0].id;
+          const newAttempts = failedListing[0].verification_attempts + 1;
+
+          // Update attempts in failedlistings
+          const updateAttempts = `UPDATE failedlistings SET verification_attempts = ? WHERE id = ?`;
+          await db.execute(updateAttempts, [newAttempts, failedListingId]);
+
+          // On the second failure, insert into scraped_data
+          if (newAttempts >= 2) {//check how many attempts were made
+            console.log(params);
+            console.log(scrapedData)
+              const insertScrapedData = `INSERT INTO scraped_data (failedlisting_id, name, description, price, size, manufacturer, material, image)
+                                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+                                         await db.execute(insertScrapedData, [
+                                          failedListingId, toNull(scrapedData.name), toNull(scrapedData.description), toNull(scrapedData.price),
+                                          toNull(scrapedData.size), toNull(scrapedData.manufacturer), toNull(scrapedData.material),
+                                          toNull(scrapedData.imageUrl)
+                                      ]);//in case the values are null, like in the size, material etc.
+              return res.redirect('/sellitem?info=Your item has failed verification again. It will be reviewed by an admin and you will be updated on the result.');
+          }//return and redirect
+      } else {
+          // Insert new record into failedlistings
+          const insertFailedListing = `INSERT INTO failedlistings (name, description, price, size, manufacturer, material, category, image, seller_id, verification_attempts)
+                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`;
+          await db.execute(insertFailedListing, [name, description, price, size, manufacturer, material, category, uploadedImageFilename, userId]);
+          return res.redirect('/sellitem?error=Verification has failed. Please check your inputs and try again');
+      }
+  }
+}
+
+// category specific fields 
+function processCategoryFields(req) {
+  let missingFields = ['name', 'description', 'price', 'category', 'image'];
+  let size = null;
+  let material = null;
+  let manufacturer = null;
+
+  // take category from body of form
+  const { category } = req.body;
+
+  // switch statement to handle category fields
+  switch (category) {
+      case 'Figures':
+          size = req.body.figuresSize || 'Unknown';
+          material = req.body.figuresMaterial || 'Unknown';
+          manufacturer = req.body.figuresManufacturer || 'Unknown';
+          missingFields = missingFields.concat(['figuresSize', 'figuresMaterial', 'figuresManufacturer']);
+          break;
+      case 'Clothes':
+          size = req.body.clothesSize || 'Unknown';
+          material = req.body.clothesMaterial || 'Unknown';
+          manufacturer = req.body.clothesManufacturer || 'Unknown';
+          missingFields = missingFields.concat(['clothesSize', 'clothesMaterial', 'clothesManufacturer']);
+          break;
+      case 'Household':
+          size = req.body.householdSize || 'Unknown';
+          material = req.body.householdMaterial || 'Unknown';
+          missingFields = missingFields.concat(['householdSize', 'householdMaterial']);
+          break;
+      case 'Accessories':
+          size = req.body.accessoriesSize || 'Unknown';
+          material = req.body.accessoriesMaterial || 'Unknown';
+          manufacturer = req.body.accessoriesManufacturer || 'Unknown';
+          missingFields = missingFields.concat(['accessoriesSize', 'accessoriesMaterial', 'accessoriesManufacturer']);
+          break;
+      default:
+          console.warn(`Unknown category: ${category}`);
+          break;
+  }
+
+      // Check if  field is a category specific
+      // and then check if the unique field is present based on category
+  missingFields = missingFields.filter(field => {
+    if (field.includes(category.toLowerCase())) {
+      return !req.body[field];
+    } else {
+      return !req.body[field] && field !== 'image';
+    }
+  });
+
+  const uploadsBasePath = path.join(__dirname, 'uploads');
+  const uploadsRelativePath = '';
+  let uploadedImagePath = null;
+  let uploadedImageRelativePath = null;
+  if (req.file) {
+    uploadedImagePath = path.join(uploadsBasePath, req.file.filename); // Absolute path for server 
+    uploadedImageRelativePath = path.join(uploadsRelativePath, req.file.filename); // Relative path for web 
+  }
+
+  return {
+      size,
+      material,
+      manufacturer,
+      missingFields
+  };
+  //return the values 
+}
+
+// post route for submission and verification
+app.post('/submit-listing', uploadMiddleware, async (req, res) => {
+  const { name, price, description, category } = req.body;
+  const userId = req.user.id;
+  const uploadedImagePath = req.file ? req.file.path : null;
+  
+
+  // process category specific fields
+  const { size, material, manufacturer, missingFields } = processCategoryFields(req);
+
+  // if theres missing fields, return errors
+  if (missingFields.length > 0) {
+      return res.redirect(`/sellitem?error=Missing required fields: ${missingFields.join(', ')}`);
+  }
+
+  // prepare parameters for verification
+  const params = {
+      name,
+      price: parseFloat(price),
+      description,
+      size,
+      manufacturer,
+      material,
+      category,
+      uploadedImagePath
+  };
+
+  try {
+      const scrapedData = await selectMostRelevantData(name);
+
+      // run the verification
+      const verificationResult = await verifyItem(params, scrapedData, path.join(__dirname, 'uploads'));
+
+      // handle the verification logic
+      const result = await handleVerification(res, params, verificationResult, userId);
+      res.json(result);
+  } catch (error) {
+      console.error('Error during verification:', error);
+      res.status(500).send('Internal Server Error');
+  }
+});
+//create the function to choose which scraper to use
+//the name is taken from the form and then checked on both sites and compared with both of the first values
+//the similarity is checked and whichever returns a higher value is used for scraping
+async function selectMostRelevantData(name) {
+  const [kaikaResult, crunchyrollResult] = await Promise.all([
+    scrapeFromKaika(name),
+    scrapeFromCrunchyroll(name)
+]);
+
+const kaikaName = kaikaResult?.name || '';
+const crunchyrollName = crunchyrollResult?.name || '';
+
+const kaikaSimilarity = stringSimilarity.compareTwoStrings(name.toLowerCase(), kaikaName.toLowerCase());
+const crunchyrollSimilarity = stringSimilarity.compareTwoStrings(name.toLowerCase(), crunchyrollName.toLowerCase());
+
+return kaikaSimilarity >= crunchyrollSimilarity ? kaikaResult : crunchyrollResult;
+}
+
+app.use('/', logoutRoute);
+app.use('/', pageRouter);
+app.use('/', authRouter);
+app.use('/', userRoutes);
+app.use('/', scraperRoutes);
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is now running on port ${PORT}, localhost:${PORT}`);
+  console.log('DB_HOST:', process.env.DB_HOST);
+  console.log('DB_USER:', process.env.DB_USER);
+  console.log('DB_PASSWORD:', process.env.DB_PASSWORD);
+  console.log('DB_DATABASE:', process.env.DB_DATABASE);
+
+});
+
+const natural = require('natural');
+const classifier = new natural.BayesClassifier();
+//CREATED PRETRAINED classifier model. this is used to predict the category through a given description
+
+function trainClassifier() {
+//training the nlp for categories. started with around 10 with each category
+//more documents are recommended if more and more users insert more and more items, help reduce the bias
+    console.log('Classifier Trained');
+    classifier.train();
+    //train and save, in the case of retraining the saved classifier can be used
+    console.log('Classifier Saved');
+    classifier.save('classifier.json', err => {
+        if (err) {
+            console.log('Error saving classifier:', err);
+        } else {
+            console.log('Classifier saved successfully.');
+        }
+    });
+}
+
+trainClassifier();
+
+module.exports = {
+    classifier,
+    trainClassifier
+};
+# .env
+DB_HOST=localhost     # MySQL instance
+DB_USER=root          # DB username
+DB_PASSWORD=rootpwd  # DB password
+DB_DATABASE=ecomm          # DB name
+SECRET_KEY=mysecretkey     #
+PORT=3000                  # port
+
+/*global css*/
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    height: 100%;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+.site-header {
+    background-color: #131921;
+    color: white;
+}
+
+.top-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 25px;
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    background-color: #2C2C54;
+}
+
+.header-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px;
+
+}
+
+.logo-link {
+    display: inline-block;
+    margin-right: 20px;
+
+}
+
+.header-logo {
+    height: 50px;
+    width: auto;
+}
+
+.search-container {
+    max-width: 100%;
+    margin-left: 20px;
+    margin-right: auto;
+}
+
+.search-container form {
+    display: flex;
+    width: 500px;
+}
+
+.search-container input[type="text"] {
+    flex: 1;
+    padding: 8px;
+    border: none;
+    border-radius: 20px 0 0 20px;
+}
+
+.search-container button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 0 20px 20px 0;
+    background-color: #febd69;
+    cursor: pointer;
+}
+
+.welcome-message {
+    margin-right: 20px;
+    white-space: nowrap;
+}
+
+.account-menu {
+    position: relative;
+    display: inline-block;
+}
+
+.welcome-message {
+    cursor: pointer;
+    margin-right: 20px;
+}
+
+.welcome-message i {
+    margin-left: 5px;
+}
+
+.dropdown-content {
+    display: none;
+    position: absolute;
+    right: 0;
+    background-color: #2C2C54;
+    min-width: 160px;
+    box-shadow: 0px 8px 16px 0px rgba(0, 0, 0, 0.2);
+    z-index: 1;
+}
+
+.dropdown-content a {
+    color: black;
+    padding: 12px 16px;
+    text-decoration: none;
+    display: block;
+}
+
+.dropdown-content a:hover {
+    background-color: #AAABB8;
+}
+
+.account-menu:hover .dropdown-content {
+    display: block;
+}
+
+.account-menu:hover .welcome-message {
+    background-color: #575fcf;
+    color: white;
+}
+
+.bottom-header {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 10px;
+    position: sticky;
+    top: 60px;
+    z-index: 999;
+    background-color: #474787;
+}
+
+.account-links {
+    display: flex;
+    justify-content: flex-end;
+    position: absolute;
+    right: 10px;
+    top: 10px;
+}
+
+.category-nav {
+    display: flex;
+    justify-content: center;
+}
+
+.bottom-header .category-nav:first-of-type {
+    display: none;
+}
+
+.category-nav a {
+    color: white;
+    text-decoration: none;
+    padding: 5px 10px;
+    margin: 0 10px;
+    transition: background-color 0.3s;
+}
+
+.category-nav a:hover {
+    background-color: #AAABB8;
+    border-radius: 5px;
+}
+
+.account-links a {
+    color: white;
+    text-decoration: none;
+    margin-right: 20px;
+}
+
+.account-links {
+    position: absolute;
+    right: 10px;
+    top: 10px;
+}
+
+.carousel {
+    position: relative;
+    margin: auto;
+    overflow: hidden;
+}
+
+.slide {
+    display: none;
+}
+
+.slide img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.active {
+    display: block;
+}
+
+.prev,
+.next {
+    cursor: pointer;
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: auto;
+    padding: 16px;
+    color: white;
+    font-weight: bold;
+    font-size: 18px;
+    border-radius: 0 3px 3px 0;
+    user-select: none;
+}
+
+.next {
+    right: 0;
+    border-radius: 3px 0 0 3px;
+}
+
+.prev:hover,
+.next:hover {
+    background-color: rgba(0, 0, 0, 0.8);
+}
+
+.featured-heading {
+    font-size: 24px;
+    color: #333;
+    text-align: center;
+    margin: 40px 0 20px;
+}
+
+.section-heading {
+    font-size: 24px;
+    color: #333;
+    margin-bottom: 20px;
+}
+
+.indexitems-container {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 20px;
+    justify-content: space-evenly;
+    padding: 0 50px;
+}
+
+.indexitems-container .item {
+    border: 1px solid #ddd;
+    padding: 10px;
+    background-color: #f9f9f9;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.indexitems-container .item img {
+    height: 200px;
+    display: block;
+    margin-bottom: 10px;
+    margin: auto;
+}
+
+.indexitems-container .item h3 {
+    font-size: 16px;
+    color: #333;
+    margin: 10px 0 5px;
+}
+
+.indexitems-container .item p {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 15px;
+}
+
+.indexitems-container .item button {
+    background-color: #474787;
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    cursor: pointer;
+    text-align: center;
+}
+
+.indexitems-container .item button:hover {
+    background-color: #0056b3;
+}
+
+@media (min-width: 1200px) {
+    .indexitems-container {
+        grid-template-columns: repeat(5, 1fr);
+    }
+}
+
+@media (max-width: 1199px) {
+    .indexitems-container {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+}
+
+@media (max-width: 768px) {
+    .indexitems-container {
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    }
+}
+
+#about {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+    background: white;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+#about h1 {
+    color: #333;
+    text-align: center;
+    margin-bottom: 1rem;
+}
+
+.about-content {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 2rem;
+}
+
+.about-image {
+    max-width: 300px;
+    height: auto;
+    border-radius: 5px;
+}
+
+.about-text {
+    flex-grow: 1;
+    color: #444;
+}
+
+.about-text p {
+    line-height: 1.6;
+    margin-bottom: 1rem;
+}
+
+.about-text blockquote {
+    padding: 1rem;
+    background: #eee;
+    border-left: 4px solid #0aaff1;
+    margin: 2rem 0;
+    font-style: italic;
+}
+
+#contact {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 2rem;
+    background: white;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    text-align: center;
+}
+
+#contact h1 {
+    color: #333;
+    margin-bottom: 1rem;
+}
+
+#contact p {
+    color: #555;
+    margin-bottom: 2rem;
+}
+
+#contact ul {
+    list-style-type: none;
+    padding: 0;
+    margin: 0;
+}
+
+#contact li {
+    margin-bottom: 0.5rem;
+    font-size: 1.1rem;
+    color: #444;
+}
+
+#contact li:before {
+    content: '✉';
+    color: #0aaff1;
+    margin-right: 0.5rem;
+}
+
+#contact li:nth-child(2):before {
+    content: '☎';
+}
+
+#contact li:nth-child(3):before {
+    content: '🏠';
+}
+
+.our-services {
+    max-width: 1200px;
+    margin: 2rem auto;
+    padding: 2rem;
+    background: white;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    text-align: center;
+}
+
+.our-services h1,
+.our-services h2 {
+    color: #333;
+}
+
+.our-services p {
+    color: #555;
+    margin-bottom: 1rem;
+}
+
+.services-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1rem;
+}
+
+.service {
+    background: #f5f5f5;
+    padding: 1rem;
+    border-radius: 5px;
+    transition: transform 0.3s ease;
+}
+
+.service:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+@media (max-width: 768px) {
+    .our-services {
+        padding: 1rem;
+    }
+}
+
+#terms {
+    max-width: 800px;
+    margin: 2rem auto;
+    padding: 2rem;
+    background: white;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    line-height: 1.6;
+}
+
+#terms h1 {
+    color: #333;
+    margin-bottom: 1rem;
+    text-align: center;
+}
+
+#terms p {
+    color: #555;
+    margin-bottom: 1rem;
+    text-align: justify;
+}
+
+@media (max-width: 768px) {
+    #terms {
+        padding: 1rem;
+    }
+}
+
+@media (max-width: 768px) {
+    #contact {
+        padding: 1rem;
+    }
+
+    #contact ul {
+        text-align: left;
+    }
+}
+
+@media (max-width: 768px) {
+    .about-content {
+        flex-direction: column;
+    }
+
+    .about-image {
+        width: 100%;
+
+    }
+}
+
+#submitListingForm {
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    margin: 20px auto;
+    max-width: 600px;
+}
+
+#submitListingForm label {
+    display: block;
+    margin-top: 15px;
+    margin-bottom: 5px;
+    font-weight: bold;
+    color: #333;
+}
+
+#submitListingForm input[type="text"],
+#submitListingForm input[type="number"],
+#submitListingForm select,
+#submitListingForm textarea {
+    width: calc(100% - 20px);
+
+    padding: 10px;
+    margin-bottom: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+#submitListingForm input[type="file"] {
+    border: none;
+    margin-bottom: 10px;
+}
+
+#submitListingForm input[type="submit"] {
+    display: block;
+    width: 100%;
+    padding: 10px 15px;
+    background-color: #5cb85c;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+    margin-top: 20px;
+}
+
+#submitListingForm input[type="submit"]:hover {
+    background-color: #4cae4c;
+}
+
+#submitListingForm input[type="file"]::-webkit-file-upload-button {
+    padding: 10px 15px;
+    border: none;
+    border-radius: 4px;
+    background-color: #ddd;
+    transition: background-color 0.3s;
+}
+
+#submitListingForm input[type="file"]::-webkit-file-upload-button:hover {
+    background-color: #ccc;
+}
+
+@media (max-width: 767px) {
+    #submitListingForm {
+        padding: 10px;
+    }
+}
+
+#item-section .items {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-around;
+}
+
+#item-section .item {
+    flex-basis: 20%;
+    text-align: center;
+}
+
+#item-section .item img {
+    max-width: 100%;
+    height: auto;
+}
+
+.add-to-cart {
+    margin-top: 10px;
+    padding: 10px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    cursor: pointer;
+}
+
+#cart-container {
+    display: flex;
+    justify-content: space-between;
+}
+
+#cart-items {
+    flex-grow: 1;
+    padding-right: 1rem;
+}
+
+.cart-item {
+    display: flex;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding: 1rem;
+    background: #f9f9f9;
+    border-radius: 4px;
+}
+
+.cart-item-image {
+    max-width: 100px;
+    margin-right: 1rem;
+}
+
+.cart-item-info {
+    flex-grow: 1;
+}
+
+.cart-item h3,
+.cart-item-price,
+.item-total {
+    margin: 0.5rem 0;
+}
+
+.quantity-input {
+    padding: 0.25rem;
+    margin-right: 1rem;
+}
+
+.remove-btn {
+    background-color: #ff6b6b;
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.remove-btn:hover {
+    background-color: #ff4c4c;
+}
+
+.cart-summary {
+    background: #f9f9f9;
+    border: 1px solid #e1e1e1;
+    border-radius: 8px;
+    padding: 20px;
+    margin-top: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.cart-summary h2 {
+    margin-bottom: 1rem;
+    color: #333;
+}
+
+.cart-summary p {
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+    line-height: 1.5;
+    color: #555;
+}
+
+.cart-total {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid #e1e1e1;
+    font-size: 1.2rem;
+    color: #333;
+}
+
+.checkout-btn {
+    background-color: #0aaff1;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    margin-top: 1.5rem;
+    width: 100%;
+    font-size: 1.1rem;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+.checkout-btn:hover {
+    background-color: #0084c9;
+}
+
+@media (max-width: 768px) {
+    .cart-summary {
+        padding: 10px;
+    }
+}
+
+@media (max-width: 600px) {
+
+    .top-header,
+    .bottom-header {
+        position: static;
+    }
+
+    .bottom-header {
+        flex-direction: column;
+    }
+
+    .search-container {
+        position: static;
+        width: auto;
+        left: auto;
+        transform: none;
+    }
+
+    .search-container form {
+        margin-bottom: 10px;
+    }
+
+    .account-links {
+        position: static;
+        margin: 10px 0;
+        order: -1;
+    }
+}
+
+.left-column,
+.right-column {
+    padding: 20px;
+    border: 1px solid #ccc;
+    background-color: #f9f9f9;
+    margin-bottom: 20px;
+}
+
+.left-column {
+    width: 66.666%;
+    float: left;
+}
+
+.right-column {
+    width: 33.333%;
+    float: right;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    border: 1px solid #ccc;
+    background-color: #f9f9f9;
+    margin-bottom: 20px;
+}
+
+#account-form input[type="email"],
+#account-form input[type="text"],
+#account-form input[type="password"] {
+    width: 100%;
+    max-width: 400px;
+    box-sizing: border-box;
+    margin-bottom: 10px;
+}
+
+#account-form .btn {
+    width: auto;
+    max-width: 200px;
+    box-sizing: border-box;
+    display: block;
+    margin: 20px 0;
+}
+
+.left-column input[type="email"],
+.left-column input[type="text"],
+.left-column input[type="password"],
+.left-column .btn {
+    width: 100%;
+    max-width: 400px;
+    box-sizing: border-box;
+}
+
+.left-column #action-buttons .btn {
+    display: block;
+    margin-bottom: 10px;
+    width: auto;
+    max-width: 200px;
+}
+
+#action-buttons .btn {
+    display: block;
+    margin-bottom: 10px;
+    width: auto;
+    max-width: 200px;
+}
+
+#user-items .item,
+#pending-items .item {
+    display: inline-block;
+    vertical-align: top;
+    width: calc(20% - 10px);
+    border: 1px solid #ddd;
+    margin-bottom: 10px;
+    padding: 10px;
+    background-color: #fff;
+    box-sizing: border-box;
+}
+
+#user-items img {
+    height: 150px;
+}
+
+#user-items a {
+    color: #000;
+}
+
+#content-wrap:after {
+    content: "";
+    display: table;
+    clear: both;
+}
+
+@media (max-width: 768px) {
+
+    .left-column,
+    .right-column {
+        width: 100%;
+        float: none;
+    }
+
+    #user-items .item,
+    #pending-items .item {
+        width: 100%;
+        margin-right: 0;
+    }
+
+    #account-form input[type="email"],
+    #account-form input[type="text"],
+    #account-form input[type="password"],
+    #account-form .btn {
+        max-width: none;
+    }
+
+}
+
+#itempage {
+    display: flex;
+    max-width: 1200px;
+    margin: auto;
+    padding: 20px;
+    align-items: flex-start;
+    gap: 40px;
+}
+
+#itempage .item-image {
+    flex: 1;
+    max-width: 500px;
+}
+
+#itempage .item-image img {
+    width: 100%;
+    height: auto;
+    border-radius: 4px;
+}
+
+#itempage .item-details {
+    flex: 1;
+    padding: 20px;
+    background: #fff;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    border-radius: 4px;
+}
+
+#itempage h1 {
+    color: #333;
+    margin-bottom: 16px;
+}
+
+#itempage .item-description {
+    color: #666;
+    margin-bottom: 16px;
+}
+
+#itempage .item-price {
+    color: #000;
+    font-weight: bold;
+    margin-bottom: 16px;
+}
+
+#itempage .item-meta {
+    list-style: none;
+    padding: 0;
+    margin-bottom: 16px;
+}
+
+#itempage .item-meta li {
+    margin-bottom: 8px;
+}
+
+#itempage .add-to-basket {
+    background-color: #5c6ac4;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+#itempage .add-to-basket:hover {
+    background-color: #4a57a3;
+}
+
+@media (max-width: 768px) {
+    #itempage {
+        flex-direction: column;
+    }
+
+    #itempage .item-image,
+    #itempage .item-details {
+        max-width: 100%;
+        flex-basis: auto;
+    }
+}
+
+#similar-items {
+    text-align: center;
+    margin: 40px 0;
+}
+
+#similar-items .items {
+    display: flex;
+    justify-content: space-around;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+#similar-items .similar-item {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    background-color: #fff;
+    border-radius: 4px;
+    overflow: hidden;
+    width: 200px;
+    margin: auto;
+}
+
+#similar-items .similar-item img {
+    width: 100%;
+    object-fit: contain;
+    height: 150px;
+    background-color: #f8f8f8;
+}
+
+#similar-items .similar-item h3 {
+    font-size: 1rem;
+    padding: 10px;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#similar-items .similar-item p {
+    padding: 0 10px;
+    margin: 10px 0;
+}
+
+@media (max-width: 992px) {
+    #similar-items .similar-item {
+        width: calc(50% - 20px);
+    }
+}
+
+@media (max-width: 768px) {
+    #similar-items .similar-item {
+        width: 100%;
+    }
+}
+
+footer {
+    background-color: #AAABB8;
+    color: #fff;
+    text-align: center;
+    padding: 10px 0;
+    width: 100%;
+}
+
+#footer-content {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+}
+
+#page-container {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+#content-wrap {
+    flex: 1;
+}
+
+#footer-nav a,
+#social-media a {
+    color: white;
+    margin: 0 10px;
+    text-decoration: none;
+}
+
+#social-media i {
+    margin-right: 5px;
+}
+
+#footer-nav a:hover,
+#social-media a:hover {
+    text-decoration: underline;
+}
+
+.form-container {
+    display: flex;
+    justify-content: space-around;
+    align-items: flex-start;
+    margin-top: 20px;
+}
+
+.form-box {
+    flex: 0 0 30%;
+    max-width: 550px;
+    margin: 10px;
+    padding: 20px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    background-color: #AAABB8;
+}
+
+.form-box:first-child {
+    margin-right: 5px;
+}
+
+.form-box:last-child {
+    margin-left: 5px;
+    margin-right: 300px;
+}
+
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+}
+
+.form-group input[type="text"],
+.form-group input[type="password"],
+.form-group input[type="email"] {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin-bottom: 10px;
+}
+
+.form-box button {
+    padding: 10px 15px;
+    background-color: #474787;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.form-box button:hover {
+    background-color: #0056b3;
+}
+
+.form-container input[type="text"],
+.form-container input[type="password"],
+.form-container input[type="email"],
+.form-container button {
+    outline: none;
+}
+
+@media (max-width: 768px) {
+    .form-container {
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .form-box {
+        width: 80%;
+        margin: 10px 0;
+    }
+}
+
+@media (max-width: 600px) {
+    #footer-content {
+        flex-direction: column;
+    }
+}
+
+#about {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 50px 20px;
+}
+
+.about-content {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 30px;
+}
+
+.about-image {
+    border-radius: 50%;
+    width: 150px;
+    height: auto;
+}
+
+.about-text {
+    max-width: 600px;
+}
+
+blockquote {
+    font-style: italic;
+    color: #555;
+    margin: 20px 0;
+}
+
+button {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    cursor: pointer;
+    border-radius: 5px;
+}
+
+button:hover {
+    background-color: #0056b3;
+}
+
+@media (max-width: 768px) {
+    .about-content {
+        flex-direction: column;
+        text-align: center;
+    }
+
+    .about-image {
+        margin-bottom: 20px;
+    }
+}
+
+.products-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 20px;
+    padding: 20px;
+    flex-grow: 1;
+}
+
+.product-card {
+    background-color: #fff;
+    border: 1px solid #ddd;
+    box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 15px;
+}
+
+.product-name {
+    font-size: 18px;
+    color: #333;
+    margin-bottom: 10px;
+}
+
+.product-image {
+    max-width: 100%;
+    height: 250px;
+    border-bottom: 1px solid #ddd;
+    margin-bottom: 15px;
+}
+
+.product-add-button {
+    padding: 10px 20px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.product-add-button:hover {
+    background-color: #0056b3;
+}
+
+.main-flex-container {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+}
+
+.filter-sidebar {
+    width: 250px;
+    margin-right: 20px;
+    padding: 20px;
+    background-color: #fff;
+    border-radius: 8px;
+    box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.filter-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.filter-form label,
+.filter-form select,
+.filter-form button {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 5px;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+}
+
+.filter-form button {
+    background-color: #007bff;
+    color: white;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.filter-form button:hover {
+    background-color: #0056b3;
+}
+
+@media (max-width: 768px) {
+    .main-flex-container {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .filter-sidebar {
+        width: 100%;
+        margin-right: 0;
+        margin-bottom: 20px;
+    }
+}
+
+.orders-list {
+    list-style: none;
+    padding: 10px;
+    ;
+    width: 99%;
+    margin: auto;
+}
+
+.orders-list>li {
+    background: #fff;
+    border: 1px solid #ccc;
+    padding: 15px;
+    margin-bottom: 20px;
+    border-radius: 4px;
+    list-style-type: none;
+}
+
+.orders-list h3 {
+    color: #333;
+    margin-bottom: 10px;
+}
+
+.orders-list>li>p {
+    color: #555;
+    margin-bottom: 5px;
+}
+
+.orders-list ul {
+    padding-left: 20px;
+}
+
+.orders-list ul li {
+    background: #f6f6f6;
+    border: 1px solid #eaeaea;
+    padding: 5px;
+    margin-bottom: 5px;
+    border-radius: 4px;
+}
+
+.orders-list ul li a {
+    text-decoration: none;
+    color: #0aaff1;
+}
+
+.orders-list p:contains('Pending') {
+    color: #e1a400;
+    font-weight: bold;
+}
+
+.orders-list p:not(:contains('Pending')) {
+    color: #4CAF50;
+    font-weight: bold;
+}
+
+@media (max-width: 768px) {
+    .orders-list>li {
+        padding: 10px;
+    }
+
+    .orders-list ul {
+        padding-left: 10px;
+    }
+}
+
+#itemSelectionForm,
+#itemEditForm {
+    width: 100%;
+    max-width: 500px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    grid-gap: 10px;
+    padding: 20px;
+    background: #f8f8f8;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+#itemEditForm>* {
+    width: 100%;
+}
+
+#itemEditForm label {
+    grid-column: span 2;
+    text-align: left;
+    margin: 10px 0 5px;
+}
+
+#itemEditForm input[type="text"],
+#itemEditForm input[type="number"],
+#itemEditForm select,
+#itemEditForm textarea {
+    padding: 10px;
+    margin-bottom: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+#itemEditForm textarea {
+    grid-column: span 2;
+    resize: vertical;
+    height: 80px;
+}
+
+#itemEditForm button {
+    grid-column: span 2;
+    padding: 10px 20px;
+    margin-top: 10px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+#itemEditForm button:hover {
+    background-color: #0056b3;
+}
+
+@media (max-width: 768px) {
+
+    #itemSelectionForm,
+    #itemEditForm {
+        grid-template-columns: 1fr;

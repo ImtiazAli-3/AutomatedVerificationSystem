@@ -1,0 +1,143 @@
+<%- include('header') %>
+<div id="page-container">
+<main id="content-wrap">
+<!-- account page, contains users submitted items, their pending items and account info -->
+<div class="right-column">
+    <div>
+      <section id="user-info">
+        <h1>Account Details</h1>
+        <p><strong>Email:</strong> <%- user.email %></p>
+        <p><strong>Name:</strong> <%- user.name %> <%- user.lastname %></p>
+      </section>
+      <section>
+        <h1>Edit Account</h1>
+        <form id="account-form" action="/update-account" method="post">
+          <div>
+            <label for="email">Email:</label>
+            <input type="email" id="email" name="email" value="<%- user.email %>" required>
+          </div>
+          <div>
+            <label for="name">Name:</label>
+            <input type="text" id="name" name="name" value="<%- user.name %>" required>
+          </div>
+          <div>
+            <label for="lastname">Surname:</label>
+            <input type="text" id="lastname" name="lastname" value="<%- user.lastname %>" required>
+          </div>
+          <div>
+            <label for="address">Address:</label>
+            <input type="text" id="address" name="address" value="<%- user.address %>" required>
+          </div>
+          <div>
+            <label for="post-code">Post Code:</label>
+            <input type="text" id="post-code" name="postCode" value="<%- user.post_code %>" required>
+          </div>
+          <div>
+            <label for="city">City:</label>
+            <input type="text" id="city" name="city" value="<%- user.city %>" required>
+          </div>
+          <!-- Password change fields -->
+          <div>
+            <label for="old-password">Old Password:</label>
+            <input type="password" id="old-password" name="oldPassword">
+          </div>
+          <div>
+            <label for="new-password">New Password:</label>
+            <input type="password" id="new-password" name="newPassword">
+          </div>
+          <div>
+            <button type="submit" class="btn">Update Account</button>
+          </div>
+        </form>
+      </section>
+      <!-- user can change all of their account information here   -->
+  </div>
+</div>
+<!-- user views all of their items they have submitted and been verified. items can be edited -->
+  <div class="left-column">
+    <section id="user-items">
+      <h1>Your Items</h1>
+      <% if (typeof items !== 'undefined' && items.length > 0) { %>
+        <% items.forEach(function(item) { %>
+          <div class="item">
+            <img src="/uploads/<%= item.image %>">
+            <a href="/item/<%= item.id %>">
+            <h3><%= item.name %></h3>
+            </a>
+            <p>£<%= item.price %></p>
+          </div>
+        <% }) %>
+      <% } else { %>
+        <p>You have no items listed for sale.</p>
+      <% } %>
+    </section>
+    
+    <section id="action-buttons">
+      <a href="/sellitem" class="btn">Sell Item</a>
+      <a href="/useredititem" class="btn">Edit Item</a>
+    </section>
+  </div>
+<!-- any item that has not been verified returns here and stays here until admin verifies  -->
+  <div class="left-column">
+  <section id="pending-items">
+    <h1>Your Pending Items</h1>
+    <% if (typeof pendingItems !== 'undefined' && pendingItems.length > 0) { %>
+      <% pendingItems.forEach(function(item) { %>
+        <div class="item">
+          <img src="/uploads/<%= item.image %>" alt="Pending Item Image" height="100">
+          <h3><%= item.name %></h3>
+          <p>£<%= item.price %></p>
+          <p>Status: Pending Review</p>
+        </div>
+      <% }) %>
+    <% } else { %>
+      <p>You have no pending items under review.</p>
+    <% } %>
+  </section>
+  </div>
+  
+
+
+<style>
+  /* Your existing button styles */
+  .btn {
+    padding: 10px 20px;
+    text-decoration: none;
+    color: white;
+    background-color: #007bff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 16px;
+    text-align: center;
+    display: block; /* Make the link fill the container */
+  }
+  
+  .btn:hover {
+    background-color: #0056b3;
+  }
+
+  /* Style inputs and labels for consistency */
+  label {
+    display: block;
+    margin-bottom: 5px;
+  }
+  
+  input[type="email"], input[type="text"], input[type="password"] {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+  }
+  
+  /* Adjust the button width */
+  button.btn {
+    width: 100%;
+    box-sizing: border-box; /* Ensures padding doesn't add to width */
+  }
+</style>
+
+</main>
+<%- include('footer') %>
+</div>

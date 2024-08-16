@@ -1,0 +1,76 @@
+<%- include('header') %>
+
+<div id="page-container">
+  <main id="content-wrap">
+    <div id="cart-container">
+      <div id="cart-items">
+        <!-- simple cart functionality. shows items that have been added by the user from the 
+        basket table. quantity can be changed, whole item amount can be removed, 
+      displays total, can be checked out with a mock checkout process -->
+        <% cartItems.forEach(item => { %>
+          <div class="cart-item">
+            <img src="/uploads/<%= item.image %>" alt="<%= item.name %>" class="cart-item-image">
+            <div class="cart-item-info">
+              <h3><%= item.name %></h3>
+              <p class="cart-item-price">£<%= Number(item.price).toFixed(2) %></p>
+              <input type="number" class="quantity-input" value="<%= item.quantity %>" min="1" onchange="updateQuantity(<%= item.id %>, this.value)">
+              <button class="remove-btn" onclick="removeFromCart(<%= item.id %>)">Remove</button>
+              <p class="item-total">Item total: £<%= (item.price * item.quantity).toFixed(2) %></p>
+            </div>
+          </div>
+        <% }) %>
+        
+      </div>
+      <form action="/process-checkout" method="post">
+        <div class="cart-summary">
+          <h2>Order Summary</h2>
+          <p class="subtotal">Subtotal: £<%= subtotal %></p>
+          <p class="shipping">Shipping: <%= shippingCost === 0 ? 'Free' : '£' + shippingCost %></p>
+          <p class="taxes">Estimated Tax: £<%= estimatedTax %></p>
+          <div class="cart-total">
+            <strong>Grand Total: £<%= cartTotal %></strong>
+          </div>
+          <input type="hidden" name="total_amount" value="<%= cartTotal %>">
+          <button type="submit" class="checkout-btn">Proceed to Checkout</button>
+        </div>
+      </form>
+
+<script>
+    function updateQuantity(itemId, newQuantity) {
+      fetch('/update-cart', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ itemId, newQuantity }),
+      }).then(response => response.json())
+      .then(data => {
+        console.log('Cart updated', data);
+        window.location.reload(); // Refreshes the page
+      })
+      .catch(error => {
+        console.error('Error updating cart:', error);
+      });
+    }
+  
+    function removeFromCart(itemId) {
+      fetch('/remove-from-cart', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ itemId }),
+      }).then(response => response.json())
+      .then(data => {
+        console.log('Item removed', data);
+        window.location.reload(); // Refreshes the page
+      })
+      .catch(error => {
+        console.error('Error removing item from cart:', error);
+      });
+    }
+  </script>
+  
+</main>
+<%- include('footer') %>
+</div>

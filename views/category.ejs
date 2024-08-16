@@ -1,0 +1,67 @@
+<link rel="stylesheet" href="/styles.css"> 
+
+<%- include('header') %>
+<!-- products are selected based on category, for every category a different page is made
+items are then refined to each page via category -->
+<!-- item filters are made here to filter by name, price, manufacturer etc. dynamic -->
+<div id="page-container">
+  <main id="content-wrap" class="main-flex-container">
+    <aside class="filter-sidebar">
+    <form action="/category/<%= title %>" method="GET" class="filter-form">
+      <label for="sort">Sort by:</label>
+      <select name="sort" id="sort">
+          <option value="name_asc" <%= currentSort === 'name_asc' ? 'selected' : '' %>>Name (A-Z)</option>
+          <option value="name_desc" <%= currentSort === 'name_desc' ? 'selected' : '' %>>Name (Z-A)</option>
+          <option value="price_asc" <%= currentSort === 'price_asc' ? 'selected' : '' %>>Price (Low to High)</option>
+          <option value="price_desc" <%= currentSort === 'price_desc' ? 'selected' : '' %>>Price (High to Low)</option>
+      </select>
+      <label for="manufacturer">Manufacturer:</label>
+      <select name="manufacturer" id="manufacturer">
+          <option value="">All Manufacturers</option>
+          <% manufacturers.forEach(function(man) { %>
+              <option value="<%= man.manufacturer %>" <%= man.manufacturer === selectedManufacturer ? 'selected' : '' %>><%= man.manufacturer %></option>
+          <% }) %>
+      </select>
+      <button type="submit">Apply Filters</button>
+    </form>
+    </aside>
+    <!-- Products  -->
+    <section class="products-grid">
+      <% items.forEach(item => { %>
+        <article class="product-card">
+          <a href="/item/<%= item.id %>">
+            <h2 class="product-name"><%= item.name %></h2>
+            <img src="/uploads/<%= item.image %>" alt="Product Image" class="product-image">
+          </a>
+          <p class="product-price">£<%= item.price %></p>
+          <button class="product-add-button" onclick="addToBasket('<%= item.id %>')">Quick Buy</button>
+        </article>
+      <% }); %>
+    </section>
+  </main>
+  <%- include('footer') %>
+</div>
+
+<script>
+var userData = {
+  userId: <%- JSON.stringify(user ? user.id : null) %>
+};
+
+function addToBasket(itemId) {
+  const quantity = 1; // Default quantity of 1
+  fetch('/add-to-basket', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ itemId, quantity, userId: userData.userId }),
+  })
+  .then(response => response.json())
+  .then(data => {
+    console.log('Item added to basket', data);
+  })
+  .catch(error => {
+    console.error('Error adding item to basket:', error);
+  });
+}
+</script>
