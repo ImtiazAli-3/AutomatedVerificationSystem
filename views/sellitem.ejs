@@ -1,0 +1,137 @@
+<%- include('header') %>
+<div id="page-container">
+<main id="content-wrap">
+<!-- form for the user to submit their item. they choose from the category
+and enter in the details. details are then checked against the verifier -->
+    <form id="submitListingForm" action="/submit-listing" method="post" enctype="multipart/form-data">
+        <label for="name">Item Name:</label>
+        <input type="text" id="name" name="name" required><br>
+    
+        <label for="category">Category:</label>
+        <select id="category" name="category" required onchange="updateCategoryFields()">
+            <option value="">Select a Category</option>
+            <option value="Figures">Figures</option>
+            <option value="Clothes">Clothes</option>
+            <option value="Household">Household</option>
+            <option value="Accessories">Accessories</option>
+            <option value="Mangas">Mangas</option>
+        </select><br>
+
+        <label for="description">Description:</label>
+        <textarea id="description" name="description" required></textarea><br>
+    
+        <label for="price">Price:</label>
+        <input type="number" id="price" name="price" step="0.01" required><br>
+    
+        <div id="figuresFields" class="categoryFields" style="display:none;">
+          <label for="figuresSize">Size (inches):</label>
+          <input type="text" id="figuresSize" name="figuresSize"><br>
+      
+          <label for="figuresMaterial">Material:</label>
+          <input type="text" id="figuresMaterial" name="figuresMaterial"><br>
+      
+          <label for="figuresManufacturer">Manufacturer:</label>
+          <input type="text" id="figuresManufacturer" name="figuresManufacturer"><br>
+      </div>
+
+      <div id="clothesFields" class="categoryFields" style="display:none;">
+        <label for="clothesSize">Size:</label>
+        <select id="clothesSize" name="clothesSize">
+                <option value="">Select Size</option>
+                <option value="XS">XS</option>
+                <option value="S">S</option>
+                <option value="M">M</option>
+                <option value="L">L</option>
+                <option value="XL">XL</option>
+            </select><br>
+        
+            <label for="clothesMaterial">Material:</label>
+            <input type="text" id="clothesMaterial" name="clothesMaterial"><br>
+        
+            <label for="clothesManufacturer">Brand:</label>
+            <input type="text" id="clothesManufacturer" name="clothesManufacturer"><br>
+        </div>
+
+        <div id="householdFields" class="categoryFields" style="display:none;">
+            <label for="householdSize">Size:</label>
+            <input type="text" id="householdSize" name="householdSize"><br>
+        
+            <label for="householdMaterial">Material:</label>
+            <input type="text" id="householdMaterial" name="householdMaterial"><br>
+        </div>
+        
+        <div id="accessoriesFields" class="categoryFields" style="display:none;">
+            <label for="accessoriesSize">Size(inches):</label>
+            <input type="text" id="accessoriesSize" name="accessoriesSize"><br>
+        
+            <label for="accessoriesMaterial">Material:</label>
+            <input type="text" id="accessoriesMaterial" name="accessoriesMaterial"><br>
+
+            <label for="accessoriesManufacturer">Manufacturer:</label>
+            <input type="text" id="accessoriesManufacturer" name="accessoriesManufacturer"><br>
+        </div>
+    
+        <div id="mangasFields" class="categoryFields" style="display:none;">
+        </div>
+
+        <label for="image">Image:</label>
+        <input type="file" id="image" name="image" accept="image/*"><br>
+    
+        <input type="submit" value="Submit Listing">
+    </form>
+
+</main>
+<%- include('footer') %>
+</div>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+  updateCategoryFields();
+});
+function updateCategoryFields() {
+  // Hide all fields initially
+  var allFields = document.querySelectorAll('.categoryFields');
+  allFields.forEach(fieldsContainer => {
+    fieldsContainer.style.display = 'none';
+    var inputs = fieldsContainer.querySelectorAll('input, select');
+    inputs.forEach(input => {
+      input.removeAttribute('required');
+    });
+  });
+
+  // Get the selected category and convert it to the expected id format
+  var selectedCategory = document.getElementById('category').value;
+  // convert the category to lowercase
+  var fieldsToShowId = selectedCategory.toLowerCase() + 'Fields';
+  var fieldsToShow = document.getElementById(fieldsToShowId);
+
+  // Show fields for selected category and set them required
+  if (fieldsToShow) {
+    fieldsToShow.style.display = 'block';
+    var inputsToShow = fieldsToShow.querySelectorAll('input, select');
+    inputsToShow.forEach(input => {
+      if (input.type !== 'file') {
+        input.setAttribute('required', '');
+      }
+    });
+  }
+}
+
+// Run updateCategoryFields on page load & when the category changes
+document.addEventListener('DOMContentLoaded', updateCategoryFields);
+document.getElementById('category').addEventListener('change', updateCategoryFields);
+
+</script>
+
+<script type="text/javascript">
+  window.onload = function() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const error = urlParams.get('error');
+    const info = urlParams.get('info');
+
+    if (error) {
+      alert(decodeURIComponent(error));
+    } else if (info) {
+      alert(decodeURIComponent(info));
+    }
+  }
+</script>

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ecom</title>
+  <link rel="stylesheet" href="styles.css"> 
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.1/css/all.min.css">
+<!-- simple header for both customer and admins, both have different links dependant on role  -->
+</head>
+<body>
+  <header class="site-header">
+    <div class="top-header">
+      <a href="/" class="logo-link">
+        <img src="/uploads/logo.png" alt="Website Logo" class="header-logo">
+      </a>
+      <div class="search-container">
+        <form action="/search" method="GET">
+          <input type="text" placeholder="Search..." name="q">
+          <button type="submit">🔍</button>
+        </form>
+      </div>
+      <div class="account-links">
+        <% if (user) { %>
+            <% if (user.role === 'admin') { %>
+                <!-- Direct links for adminsm admins must be logged in -->
+                <span class="welcome-message">Welcome, <%= user.name %></span>
+                <a href="/dashboard">Admin Dashboard</a>
+                <a href="/dashboardusers">Manage Users</a>
+                <a href="/dashboardlistings">Failed Listings</a>
+                <a href="/logout">Log Out</a>
+            <% } else { %>
+                <!-- Dropdown menu for regular users -->
+                <div class="account-menu">
+                    <span class="welcome-message">Welcome, <%= user.name %><i class="fas fa-caret-down"></i></span>
+                    <div class="dropdown-content">
+                        <a href="/account">Your Account</a>
+                        <a href="/sellitem">Sell Item</a>
+                        <a href="/logout">Log Out</a>
+                    </div>
+                </div>
+                <a href="/orders">Orders</a>
+                <a href="/cart">Basket</a>
+            <% } %>
+        <% } else { %>
+            <a href="/login">Sign in</a>
+        <% } %>
+    </div>
+</div>    
+    <div class="bottom-header">
+      <nav class="category-nav">
+      </nav>
+      <nav class="category-nav">
+        <a href="/">Home</a>
+        <a href="/category/clothes">Clothes</a>
+        <a href="/category/figures">Figures</a>
+        <a href="/category/household">Household</a>
+        <a href="/category/accessories">Accessories</a>
+        <a href="/category/mangas">Mangas</a>
+      </nav>
+    </div>
+  </header>
+  
+</body>

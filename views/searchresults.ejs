@@ -1,0 +1,26 @@
+<%- include('header') %>
+
+<div id="page-container">
+  <main id="content-wrap">
+    <h1>Search Results for "<%= searchTerm %>"</h1>
+<!-- simple search functionality using the names of the items, this displays all like items -->
+    <section class="products-grid">
+      <% if (items.length === 0) { %>
+        <p>No results found.</p>
+      <% } else { %>
+        <% items.forEach(item => { %>
+          <article class="product-card">
+            <a href="/item/<%= item.id %>">
+              <h2 class="product-name"><%= item.name %></h2>
+            </a>
+            <img src="/uploads/<%= item.image %>" alt="Product Image" class="product-image">
+            <p class="product-description"><%= item.description %></p>
+            <p class="product-price">£<%= item.price %></p>
+            <button class="product-add-button" onclick="addToBasket('<%= item.id %>')">Add to Cart</button>
+          </article>
+        <% }); %>
+      <% } %>
+    </section>
+  </main>
+<%- include('footer') %>
+</div>

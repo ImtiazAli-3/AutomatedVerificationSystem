@@ -1,0 +1,29 @@
+<%- include('header') %>
+<div id="page-container">
+  <main id="content-wrap">
+    <!-- page where the user can view all of their orders -->
+    <% if (orders.length > 0) { %>
+      <div class="orders-list">
+        <% orders.forEach(order => { %>
+          <li>
+            <h3>Order ID: <%= order.id %></h3>
+            <p>Total Amount: £<%= order.total_amount %></p>
+            <p>Status: <%= order.status %></p>
+            <p>Ordered On: <%= new Date(order.created_at).toISOString().substring(0, 10) %></p>
+            <ul>
+              <% order.item_details.split(',').forEach(function(detail) { 
+                   var parts = detail.split(':'); 
+                   var itemId = parts[0];
+                   var itemName = parts[1]; %>
+                <li><a href="/item/<%= itemId %>"><%= itemName %></a></li>
+              <% }); %>
+            </ul>
+          </li>
+        <% }); %>
+      </div>
+    <% } else { %>
+      <p>You have no orders.</p>
+    <% } %>
+  </main>
+<%- include('footer') %>
+</div>

@@ -1,0 +1,82 @@
+<link rel="stylesheet" href="/styles.css"> 
+
+<%- include('header') %>
+<!-- page for the user to edit their own items-->
+<div id="page-container">
+    <main id="content-wrap">
+        <form id="itemSelectionForm">
+            <select id="itemSelector" name="item_id" required>
+                <option value="">Select an Item</option>
+                <% items.forEach(item => { %>
+                    <option value="<%= item.id %>"><%= item.name %></option>
+                <% }) %>
+            </select><!-- user picks their item from the list-->
+            <button type="button" onclick="loadItemDetails()">Load Details</button>
+        </form> <!-- after the item is loaded, they can proceed with any changes -->
+        <form id="itemEditForm" style="display: none;">
+            <input type="hidden" id="editItemId" name="id">
+            <label for="editItemName">Name:</label>
+            <input type="text" id="editItemName" name="name" required><br>
+            <label for="editItemDescription">Description:</label>
+            <textarea id="editItemDescription" name="description" required></textarea><br>
+            <label for="editItemPrice">Price:</label>
+            <input type="number" step="0.01" id="editItemPrice" name="price" required><br>
+            <label for="editItemSize">Size:</label>
+            <input type="text" id="editItemSize" name="size"><br>
+            <label for="editItemManufacturer">Manufacturer:</label>
+            <input type="text" id="editItemManufacturer" name="manufacturer"><br>
+            <label for="editItemMaterial">Material:</label>
+            <input type="text" id="editItemMaterial" name="material"><br>
+            <label for="editItemCategory">Category:</label>
+            <input type="text" id="editItemCategory" name="category" required><br>
+
+            <button type="submit">Submit Changes</button>
+        </form>
+        
+        <!-- scripts to get the items and the values dynamically -->
+        <script>
+        document.getElementById('itemSelectionForm').addEventListener('change', function() {
+            loadItemDetails();
+        });
+        
+        async function loadItemDetails() {
+            const itemId = document.getElementById('itemSelector').value;
+            if (!itemId) return;
+        
+            try {
+                const response = await fetch(`/user/edit-item?item_id=${itemId}`);
+                const item = await response.json();
+                if (item) {
+                    document.getElementById('editItemId').value = item.id;
+                    document.getElementById('editItemName').value = item.name;
+                    document.getElementById('editItemDescription').value = item.description;
+                    document.getElementById('editItemPrice').value = item.price;
+                    document.getElementById('editItemMaterial').value = item.material;
+                    document.getElementById('editItemManufacturer').value = item.manufacturer;
+                    document.getElementById('editItemCategory').value = item.category;
+                    document.getElementById('itemEditForm').style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Failed to fetch item details:', error);
+            }
+        }
+        document.getElementById('itemEditForm').addEventListener('submit', async function(event) {
+            event.preventDefault();
+            const formData = new FormData(this);
+            try {
+                const response = await fetch('/user/update-item', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.text();
+                alert(result);
+            } catch (error) {
+                console.error('Failed to update item:', error);
+            }
+        });
+        </script>
+
+
+    </main>
+  <%- include('footer') %>
+</div>

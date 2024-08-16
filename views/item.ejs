@@ -1,0 +1,71 @@
+<link rel="stylesheet" href="/styles.css"> 
+<%- include('header') %>
+
+<div id="page-container">
+    <main id="content-wrap">
+      <section id="itempage" class="item-container">
+        <div class="item-image">
+          <% if(item.image) { %>
+            <img src="/uploads/<%= item.image %>" alt="<%= item.name %>">
+          <% } else { %>
+            <p>No image available</p>
+          <% } %>
+        </div>
+  <!-- code to get the item page. each item as all of its relevant information and similar categories, which is based on its own category
+  you can add to basket with the button, which updates the basket -->
+        <div class="item-details">
+          <h1><%= item.name %></h1>
+          <p class="item-description"><%= item.description %></p>
+          <p class="item-price">Price: £<%= item.price %></p>
+          <ul class="item-meta">
+            <li><strong>Size:</strong> <%= item.size %></li>
+            <li><strong>Material:</strong> <%= item.material %></li>
+            <li><strong>Manufacturer:</strong> <%= item.manufacturer %></li>
+          </ul>
+          <button onclick="addToBasket('<%= item.id %>')">Add to Basket</button>
+        </div>    
+      </section>
+      <section id="similar-items">
+        <h2>Similar Items</h2>
+        <div class="items">
+          <% similarItems.forEach(similarItem => { %>
+            <div class="similar-item">
+              <a href="/item/<%= similarItem.id %>">
+                <img src="/uploads/<%= similarItem.image %>">
+                <h3><%= similarItem.name %></h3>
+              </a>
+              <p>£<%= similarItem.price %></p>
+            </div>
+          <% }); %>
+        </div>
+      </section>      
+    </main>
+    <script src="/routes/cart.js"></script>
+    <script>
+       
+        var userData = {
+          userId: <%- JSON.stringify(user ? user.id : null) %>
+        };
+        
+        function addToBasket(itemId) {
+          const quantity = 1; // Assuming a default quantity of 1 
+        
+          fetch('/add-to-basket', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ itemId, quantity, userId: userData.userId }),
+          })
+          .then(response => response.json())
+          .then(data => {
+            console.log('Item added to basket', data);
+          })
+          .catch(error => {
+            console.error('Error adding item to basket:', error);
+          });
+        }
+        </script>
+
+<%- include('footer') %>
+</div>
