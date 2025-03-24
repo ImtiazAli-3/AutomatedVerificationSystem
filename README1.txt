@@ -31,6 +31,8 @@ mkdir path/to/code
 after you are in the correct folder run this in the terminal:
 npm install express axios cheerio fs path mysql2 ejs multer passport passport-local express-session sharp string-similarity uuid image-hash natural bcryptjs connect-flash
 
+possible missing dependencies can be installed manually by entering the missing name
+
 after running this you should be able to run the code fine
 type in node app.js in the terminal to start the program.
 in the terminal you should see the information of the DB, again make sure that the password is rootpwd.
